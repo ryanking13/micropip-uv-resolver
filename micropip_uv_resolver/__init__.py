@@ -5,17 +5,20 @@ Experimental. See README.md.
 
 Usage, in Pyodide::
 
+    import functools
+
     import micropip
     from micropip_uv_resolver import UvResolver, load_uv
 
-    await load_uv("https://example.com/uv/uv-resolver.mjs")  # or set globalThis.uvResolver yourself
-    micropip.default_client.resolver_class = UvResolver
+    uv = await load_uv("https://example.com/uv/uv-resolver.mjs")
+    micropip.default_client.resolver = functools.partial(UvResolver, uv=uv)
     await micropip.install("fastapi")
 
 How it fits together:
 
-- uv runs as a separate Emscripten module (``globalThis.uvResolver``), built
-  from the uv-emscripten PoC with ``uv/micropip.patch``.
+- uv runs as a separate Emscripten module, built from the uv-emscripten PoC
+  with ``uv/micropip.patch``. It is loaded with :func:`load_uv` and passed to
+  :class:`UvResolver` as its ``uv`` setting.
 - uv's index requests go to ``micropip://project/<name>/``. They are answered,
   through ``globalThis.__uvFetch``, with a PEP 691 page built from
   ``micropip.sources.ordered_sources()``, so index URLs, Source plugins and the
@@ -36,8 +39,9 @@ import sys
 import sysconfig
 from typing import Any
 
+from micropip._compat import CompatibilityLayer
 from micropip.package import PackageMetadata
-from micropip.resolution import Resolution
+from micropip.resolution import Resolution, ResolveRequest
 from micropip.resolver import Resolver
 from micropip.sources import LockFileSource, ordered_sources
 from micropip.wheelinfo import WheelInfo
@@ -53,32 +57,23 @@ PROJECT_PREFIX = "micropip://project"
 LOCK_PREFIX = "micropip://lockfile/"
 
 
-def _uv_module() -> Any | None:
-    try:
-        from js import globalThis
-    except ImportError:  # not in Pyodide
-        return None
-    return getattr(globalThis, "uvResolver", None)
+def is_supported(uv: Any | None) -> bool:
+    """Whether ``uv`` (from :func:`load_uv`) is usable: loaded, and the runtime supports JSPI."""
+    return uv is not None and bool(uv.isSupported())
 
 
-def is_supported() -> bool:
-    """Whether the uv module is loaded and the runtime supports JSPI."""
-    module = _uv_module()
-    return module is not None and bool(module.isSupported())
-
-
-async def load_uv(url: str) -> None:
+async def load_uv(url: str) -> Any:
     """
-    Load the uv module (``uv-resolver.mjs``) from ``url`` and make it available
-    to :class:`UvResolver` as ``globalThis.uvResolver``.
+    Load the uv module (``uv-resolver.mjs``) from ``url`` and return it, to pass
+    to :class:`UvResolver` as ``uv``.
 
     In Node.js, ``url`` can be a file path.
     """
-    from js import Function, globalThis
+    from js import Function
 
     # A dynamic import() through a JS function, since Python can't call import()
     importer = Function("url", "return import(url)")
-    globalThis.uvResolver = await importer(url)
+    return await importer(url)
 
 
 def _abi_version() -> str:
@@ -117,13 +112,27 @@ class UvResolver(Resolver):
     """
     A :class:`micropip.resolver.Resolver` that resolves with uv.
 
-    Set it as ``resolver_class`` of a :class:`micropip.Client` (or of
-    ``micropip.default_client``) after loading the uv module (:func:`load_uv`).
+    Pass the uv module (from :func:`load_uv`) as ``uv``, through
+    ``functools.partial`` since micropip creates a resolver for each request::
+
+        client = micropip.Client(resolver=functools.partial(UvResolver, uv=uv))
+
+    Without ``uv`` (or without JSPI), it resolves with micropip's resolver.
     """
+
+    def __init__(
+        self,
+        compat_layer: CompatibilityLayer,
+        request: ResolveRequest | None = None,
+        *,
+        uv: Any | None = None,
+    ) -> None:
+        super().__init__(compat_layer, request)
+        self.uv = uv
 
     async def resolve(self) -> Resolution:
         requirements = self.request.requirements
-        if not is_supported() or any(_is_url_requirement(r) for r in requirements):
+        if not is_supported(self.uv) or any(_is_url_requirement(r) for r in requirements):
             return await super().resolve()
 
         from js import globalThis
@@ -133,7 +142,7 @@ class UvResolver(Resolver):
         # setattr: `globalThis.__uvFetch` would be name-mangled inside the class
         setattr(globalThis, "__uvFetch", handler)
         try:
-            output = await globalThis.uvResolver.resolve(
+            output = await self.uv.resolve(
                 _to_js(
                     {
                         "requirements": list(requirements),

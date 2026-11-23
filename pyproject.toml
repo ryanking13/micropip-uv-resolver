@@ -9,7 +9,7 @@ description = "Experimental micropip resolver backed by uv's resolver compiled t
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.13"
-# Needs micropip's resolver contract (Client.resolver_class, ResolveRequest,
+# Needs micropip's resolver contract (Client.resolver, ResolveRequest,
 # Resolution, sources.ordered_sources, LockFile.__iter__, ResolveRequest.installed),
 # which is on micropip main and not released yet.
 dependencies = ["micropip"]

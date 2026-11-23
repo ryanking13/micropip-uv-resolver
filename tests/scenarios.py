@@ -1,22 +1,21 @@
 # ruff: noqa: F704  (top-level await: run with pyodide.runPythonAsync)
 # Scenarios comparing UvResolver with micropip's default resolver. Run with `node tests/run.mjs`.
 # UV_MODULE (path to uv-resolver.mjs) is set by run.mjs.
+import functools
 import time
 
 import micropip
-from micropip.resolver import Resolver
 from micropip_uv_resolver import UvResolver, is_supported, load_uv
 
-await load_uv(UV_MODULE)  # noqa: F821
-assert is_supported(), "the uv module didn't load, or JSPI is unavailable"
+uv_module = await load_uv(UV_MODULE)  # noqa: F821
+assert is_supported(uv_module), "the uv module didn't load, or JSPI is unavailable"
 
 
-class UvClient(micropip.Client):
-    resolver_class = UvResolver
+def UvClient():
+    return micropip.Client(resolver=functools.partial(UvResolver, uv=uv_module))
 
 
-class DefaultClient(micropip.Client):
-    resolver_class = Resolver
+DefaultClient = micropip.Client
 
 
 def summary(resolution):
@@ -99,16 +98,9 @@ print("  urllib3<2, reinstall=True ->", summary(resolution))
 
 # 7. Fallback to micropip's resolver when the uv module isn't available
 print("\n=== fallback")
-from js import globalThis  # noqa: E402
-
-uv_module = globalThis.uvResolver
-del globalThis.uvResolver
-try:
-    assert not is_supported()
-    resolution = await UvClient().resolve(["flask"])
-    assert "flask" in names(resolution)
-    print("  without the uv module -> micropip's resolver:", ", ".join(summary(resolution)))
-finally:
-    globalThis.uvResolver = uv_module
+assert not is_supported(None)
+resolution = await micropip.Client(resolver=UvResolver).resolve(["flask"])
+assert "flask" in names(resolution)
+print("  without the uv module -> micropip's resolver:", ", ".join(summary(resolution)))
 
 print("\nAll scenarios passed")

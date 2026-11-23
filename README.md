@@ -3,7 +3,7 @@
 **Experimental.** A [micropip](https://github.com/pyodide/micropip) resolver backed by
 [uv](https://github.com/astral-sh/uv)'s resolver, compiled to Emscripten
 ([uv-emscripten](https://github.com/ryanking13/uv-emscripten) PoC). It plugs into
-micropip through `Client.resolver_class`, so micropip still installs the packages; uv
+micropip through `Client.resolver`, so micropip still installs the packages; uv
 only decides which ones.
 
 Unlike micropip's built-in resolver, uv backtracks. For example, for
@@ -12,7 +12,7 @@ micropip's resolver keeps Pyodide's newer starlette and warns.
 
 ## Requirements
 
-- **micropip main** (unreleased): needs the resolver contract (`Client.resolver_class`,
+- **micropip main** (unreleased): needs the resolver contract (`Client.resolver`,
   `ResolveRequest`, `Resolution`), `micropip.sources.ordered_sources()`,
   `LockFile.__iter__` and `ResolveRequest.installed`.
 - A runtime with **WebAssembly JSPI** (`WebAssembly.Suspending`): recent Chrome, Node.js 25+.
@@ -21,15 +21,21 @@ micropip's resolver keeps Pyodide's newer starlette and warns.
 ## Usage
 
 ```python
-import micropip
-from micropip_uv_resolver import UvResolver, is_supported, load_uv
+import functools
 
-await load_uv("https://example.com/uv/uv-resolver.mjs")  # or set globalThis.uvResolver yourself
-micropip.default_client.resolver_class = UvResolver       # or a micropip.Client subclass
+import micropip
+from micropip_uv_resolver import UvResolver, load_uv
+
+uv = await load_uv("https://example.com/uv/uv-resolver.mjs")
+micropip.default_client.resolver = functools.partial(UvResolver, uv=uv)
 await micropip.install("fastapi")
 ```
 
-`UvResolver` falls back to micropip's resolver when the uv module isn't loaded or JSPI
+micropip creates a resolver for each request, so the uv module is passed with
+`functools.partial`. A separate client works the same way:
+`micropip.Client(resolver=functools.partial(UvResolver, uv=uv))`.
+
+`UvResolver` falls back to micropip's resolver without the uv module (`uv=None`) or when JSPI
 isn't available, and for requirements uv can't handle yet (direct URLs, `emfs:`, `file:`).
 
 How it works:
