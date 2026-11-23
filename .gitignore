@@ -221,3 +221,8 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# micropip-uv-resolver build outputs (build/ and dist/ are ignored above)
+/wheels/
+*.wasm
+node_modules/

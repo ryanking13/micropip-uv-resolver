@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "micropip-uv-resolver"
+version = "0.0.1"
+description = "Experimental micropip resolver backed by uv's resolver compiled to Emscripten"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.13"
+# Needs micropip's resolver contract (Client.resolver_class, ResolveRequest,
+# Resolution, sources.ordered_sources, LockFile.__iter__, ResolveRequest.installed),
+# which is on micropip main and not released yet.
+dependencies = ["micropip"]
+
+[tool.setuptools]
+packages = ["micropip_uv_resolver"]
+
+[tool.ruff]
+line-length = 100
