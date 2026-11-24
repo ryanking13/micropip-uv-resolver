@@ -1,0 +1,36 @@
+diff -ruN --exclude=target --exclude=.cargo-ok --exclude=.cargo_vcs_info.json a/Cargo.toml b/Cargo.toml
+--- a/Cargo.toml	2006-07-24 10:21:28
++++ b/Cargo.toml	2026-10-01 17:28:50
+@@ -30,7 +30,7 @@
+ repository = "https://github.com/apache/opendal-reqsign"
+ 
+ [features]
+-default = []
++default = ["jwt"]
+ jwt = [
+     "dep:rsa",
+     "dep:serde",
+diff -ruN --exclude=target --exclude=.cargo-ok --exclude=.cargo_vcs_info.json a/src/context.rs b/src/context.rs
+--- a/src/context.rs	2006-07-24 10:21:28
++++ b/src/context.rs	2026-10-01 17:20:39
+@@ -281,7 +281,7 @@
+         std::env::vars().collect()
+     }
+ 
+-    #[cfg(any(unix, target_os = "redox"))]
++    #[cfg(all(any(unix, target_os = "redox"), not(target_arch = "wasm32")))]
+     fn home_dir(&self) -> Option<PathBuf> {
+         #[allow(deprecated)]
+         std::env::home_dir()
+diff -ruN --exclude=target --exclude=.cargo-ok --exclude=.cargo_vcs_info.json a/src/lib.rs b/src/lib.rs
+--- a/src/lib.rs	2006-07-24 10:21:28
++++ b/src/lib.rs	2026-10-01 17:28:21
+@@ -184,7 +184,7 @@
+ pub mod error;
+ mod futures_util;
+ pub mod hash;
+-#[cfg(all(not(target_arch = "wasm32"), feature = "jwt"))]
++#[cfg(feature = "jwt")]
+ pub mod jwt;
+ pub mod time;
+ pub mod utils;

@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="uv's Python dependency resolver compiled to WebAssembly." />
+    <title>uv resolver · WebAssembly</title>
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <header class="hero">
+        <h1>uv resolver</h1>
+        <p class="hero-copy"><a href="https://github.com/astral-sh/uv">uv</a>'s dependency resolver compiled to WebAssembly (<code>wasm32-unknown-emscripten</code>).</p>
+      </header>
+
+      <section id="unsupported" class="notice" hidden role="alert">
+        <strong>Unsupported browser.</strong> This demo needs WebAssembly JSPI (<code>WebAssembly.Suspending</code>), available in Chrome and Edge 137+.
+      </section>
+
+      <section class="resolver-grid" aria-label="Python dependency resolver">
+        <form id="resolver-form" class="panel input-panel">
+          <div class="panel-heading"><h2>Requirements</h2><span id="ready-status" class="status loading" aria-live="polite">Loading…</span></div>
+          <label for="requirements">PEP 508, one per line</label>
+          <textarea id="requirements" name="requirements" spellcheck="false" rows="4">flask</textarea>
+          <div class="presets" aria-label="Requirement presets">
+            <button type="button" class="preset" data-requirements="flask">flask</button>
+            <button type="button" class="preset" data-requirements="requests[socks]">requests[socks]</button>
+            <button type="button" class="preset" data-requirements="fastapi&#10;pydantic&lt;2">fastapi + pydantic&lt;2</button>
+            <button type="button" class="preset" data-requirements="django">django</button>
+            <button type="button" class="preset" data-requirements="pandas">pandas</button>
+            <button type="button" class="preset" data-requirements="black&#10;click&lt;8">black + click&lt;8</button>
+            <button type="button" class="preset preset-conflict" data-requirements="fastapi==0.110.0&#10;starlette&gt;=0.40">conflict</button>
+          </div>
+          <div class="control-grid">
+            <label for="python-version">Python version<select id="python-version" name="pythonVersion"><option>3.9</option><option>3.10</option><option>3.11</option><option selected>3.12</option><option>3.13</option><option>3.14</option></select></label>
+            <label for="platform">Platform<select id="platform" name="pythonPlatform"><optgroup label="Native"><option value="x86_64-manylinux_2_28">Linux x86_64</option><option value="aarch64-manylinux_2_28">Linux ARM64</option><option value="x86_64-apple-darwin">macOS x86_64</option><option value="aarch64-apple-darwin">macOS ARM64</option><option value="x86_64-pc-windows-msvc">Windows x86_64</option></optgroup><optgroup label="PyEmscripten (PEP 783)"><option value="wasm32-pyodide2025" data-python="3.13">Pyodide 2025 (wasm32)</option><option value="wasm32-pyodide2024" data-python="3.12">Pyodide 2024 (wasm32)</option></optgroup></select></label>
+          </div>
+          <button id="resolve" class="resolve-button" type="submit"><span class="button-label">Resolve</span><span class="button-spinner" aria-hidden="true"></span></button>
+          <p id="support-note" class="form-note"></p>
+        </form>
+
+        <section class="panel process-panel" aria-labelledby="process-title">
+          <div class="panel-heading"><h2 id="process-title">Resolver trace</h2><span id="process-state" class="status">Idle</span></div>
+          <div class="metrics" aria-label="Resolver metrics"><div><span>ELAPSED</span><strong id="elapsed">0 ms</strong></div><div><span>REQUESTS</span><strong id="requests">0</strong></div><div><span>DOWNLOADED</span><strong id="bytes">0 B</strong></div><div><span>SELECTED</span><strong id="selected">0</strong></div></div>
+          <div id="timeline" class="timeline" aria-live="polite" aria-label="Resolver events"><p class="timeline-empty">Resolver decisions and PyPI requests appear here.</p></div>
+        </section>
+      </section>
+
+      <section id="results" class="results" aria-live="polite"></section>
+    </main>
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>

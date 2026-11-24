@@ -16,8 +16,8 @@ Usage, in Pyodide::
 
 How it fits together:
 
-- uv runs as a separate Emscripten module, built from the uv-emscripten PoC
-  with ``uv/micropip.patch``. It is loaded with :func:`load_uv` and passed to
+- uv runs as a separate Emscripten module, built from ``uv/`` in this
+  repository. It is loaded with :func:`load_uv` and passed to
   :class:`UvResolver` as its ``uv`` setting.
 - uv's index requests go to ``micropip://project/<name>/``. They are answered,
   through ``globalThis.__uvFetch``, with a PEP 691 page built from

@@ -1,0 +1,60 @@
+diff -ruN --exclude=target --exclude=.cargo-ok --exclude=.cargo_vcs_info.json a/src/entry.rs b/src/entry.rs
+--- a/src/entry.rs	2006-07-24 10:21:28
++++ b/src/entry.rs	2026-10-01 17:28:03
+@@ -900,7 +900,7 @@
+                     .unwrap()
+             }
+ 
+-            #[cfg(unix)]
++            #[cfg(all(unix, not(target_arch = "wasm32")))]
+             async fn symlink(src: &Path, dst: &Path) -> io::Result<()> {
+                 tokio::fs::symlink(src, dst).await
+             }
+@@ -1034,7 +1034,7 @@
+             })
+         }
+ 
+-        #[cfg(unix)]
++        #[cfg(all(unix, not(target_arch = "wasm32")))]
+         async fn _set_perms(dst: &Path, f: Option<&mut fs::File>, mode: u32) -> io::Result<()> {
+             use std::os::unix::prelude::*;
+ 
+diff -ruN --exclude=target --exclude=.cargo-ok --exclude=.cargo_vcs_info.json a/src/header.rs b/src/header.rs
+--- a/src/header.rs	2006-07-24 10:21:28
++++ b/src/header.rs	2026-10-01 17:28:03
+@@ -779,7 +779,7 @@
+         unimplemented!();
+     }
+ 
+-    #[cfg(unix)]
++    #[cfg(all(unix, not(target_arch = "wasm32")))]
+     fn fill_platform_from(&mut self, meta: &Metadata, mode: HeaderMode) {
+         match mode {
+             HeaderMode::Complete => {
+@@ -1607,7 +1607,7 @@
+     last == Some(b'/' as u16) || last == Some(b'\\' as u16)
+ }
+ 
+-#[cfg(unix)]
++#[cfg(all(unix, not(target_arch = "wasm32")))]
+ fn ends_with_slash(p: &Path) -> bool {
+     p.as_os_str().as_bytes().ends_with(b"/")
+ }
+@@ -1634,7 +1634,7 @@
+         })
+ }
+ 
+-#[cfg(unix)]
++#[cfg(all(unix, not(target_arch = "wasm32")))]
+ /// On unix this will never fail
+ pub fn path2bytes(p: &Path) -> io::Result<Cow<'_, [u8]>> {
+     Ok(Cow::Borrowed(p.as_os_str().as_bytes()))
+@@ -1663,7 +1663,7 @@
+     }
+ }
+ 
+-#[cfg(unix)]
++#[cfg(all(unix, not(target_arch = "wasm32")))]
+ /// On unix this operation can never fail.
+ pub fn bytes2path(bytes: Cow<'_, [u8]>) -> io::Result<Cow<'_, Path>> {
+     use std::ffi::{OsStr, OsString};

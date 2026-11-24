@@ -14,7 +14,7 @@ preferences) and `ResolveRequest.installed` (#328, used for installed packages).
 ## How it fits together
 
 - uv runs as a separate Emscripten module, loaded with `load_uv()` and passed to `UvResolver` as a setting (`Client(resolver=functools.partial(UvResolver, uv=uv))`, micropip#330).
-- Changes to the PoC (`uv-emscripten-micropip.patch`, PoC crate only, nothing in uv):
+- Changes to the uv-emscripten PoC for micropip (in `uv/crates/uv-resolver-wasm` and `uv/web/uv-resolver.mjs`, nothing in uv):
   - input: `index_url` (instead of hard-coded PyPI), `preferences`
   - output: the selected wheel's `url`, `filename`, `sha256`
   - `fetch.js` calls a host-provided `globalThis.__uvFetch(url, accept)` if present

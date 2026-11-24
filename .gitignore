@@ -226,3 +226,8 @@ __marimo__/
 /wheels/
 *.wasm
 node_modules/
+
+# uv wasm build (uv/scripts/setup.sh, uv/scripts/build.sh)
+/uv/emsdk/
+/uv/uv-src/
+.wrangler/

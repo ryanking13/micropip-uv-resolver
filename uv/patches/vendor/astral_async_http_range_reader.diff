@@ -1,0 +1,47 @@
+diff -ruN --exclude=target --exclude=.cargo-ok --exclude=.cargo_vcs_info.json a/src/lib.rs b/src/lib.rs
+--- a/src/lib.rs	2006-07-24 10:21:28
++++ b/src/lib.rs	2026-10-01 17:25:49
+@@ -278,6 +278,7 @@
+         // succeed. I eventually used 10 because who cares.
+         let (request_tx, request_rx) = tokio::sync::mpsc::channel(10);
+         let (state_tx, state_rx) = watch::channel(StreamerState::default());
++        #[cfg(not(target_os = "emscripten"))]
+         tokio::spawn(run_streamer(
+             client,
+             url,
+@@ -287,6 +288,16 @@
+             state_tx,
+             request_rx,
+         ));
++        #[cfg(target_os = "emscripten")]
++        tokio::task::spawn_local(run_streamer(
++            client,
++            url,
++            extra_headers,
++            Some((response, start, end_inclusive + 1)),
++            Arc::clone(&memory_map),
++            state_tx,
++            request_rx,
++        ));
+ 
+         // Configure the initial state of the streamer.
+         let mut streamer_state = StreamerState::default();
+@@ -381,7 +392,18 @@
+         // succeed. I eventually used 10 because who cares.
+         let (request_tx, request_rx) = tokio::sync::mpsc::channel(10);
+         let (state_tx, state_rx) = watch::channel(StreamerState::default());
++        #[cfg(not(target_os = "emscripten"))]
+         tokio::spawn(run_streamer(
++            client,
++            url,
++            extra_headers,
++            None,
++            Arc::clone(&memory_map),
++            state_tx,
++            request_rx,
++        ));
++        #[cfg(target_os = "emscripten")]
++        tokio::task::spawn_local(run_streamer(
+             client,
+             url,
+             extra_headers,

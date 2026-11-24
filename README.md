@@ -1,8 +1,9 @@
 # micropip-uv-resolver
 
 **Experimental.** A [micropip](https://github.com/pyodide/micropip) resolver backed by
-[uv](https://github.com/astral-sh/uv)'s resolver, compiled to Emscripten
-([uv-emscripten](https://github.com/ryanking13/uv-emscripten) PoC). It plugs into
+[uv](https://github.com/astral-sh/uv)'s resolver, compiled to Emscripten (in `uv/`,
+which started as the [uv-emscripten](https://github.com/ryanking13/uv-emscripten) PoC).
+It plugs into
 micropip through `Client.resolver`, so micropip still installs the packages; uv
 only decides which ones.
 
@@ -54,6 +55,23 @@ How it works:
 - The result is a `micropip.resolution.Resolution` (with `requested_by`), installed by
   `Client.install_resolution()`.
 
+## Repository layout
+
+```
+micropip_uv_resolver/   The Python package: UvResolver (micropip side)
+uv/                     uv's resolver compiled to Emscripten (see uv/README.md)
+  crates/uv-resolver-wasm/  the wasm entry crate: resolver provider, C ABI, JSPI fetch bridge
+  patches/uv.patch          changes to uv, applied to a checkout of uv at a pinned commit
+  vendor/                   crates.io crates with small emscripten fixes
+  web/uv-resolver.mjs       the JS wrapper around the wasm module (also a demo site)
+  scripts/                  setup (emsdk, uv checkout) and build
+scripts/                build-uv.sh, build-wheels.sh
+tests/                  scenarios against micropip's resolver, uv module tests
+```
+
+This repository is the source of truth for all of it; uv itself is checked out at the
+commit pinned in `uv/scripts/setup.sh`.
+
 ## Building
 
 The uv wasm is not committed (4.6 MB). Build it with:
@@ -62,14 +80,9 @@ The uv wasm is not committed (4.6 MB). Build it with:
 ./scripts/build-uv.sh
 ```
 
-It clones uv-emscripten at the pinned commit into `build/uv-emscripten`, applies
-`uv/micropip.patch` (index URL and preferences inputs, selected wheel in the output, a
-host fetch hook that never throws into wasm), and builds it into `dist/uv/`. A fresh build checks out uv and needs
-~15 GB. To reuse an existing uv-emscripten build:
-
-```sh
-UV_SRC_FROM=/path/to/uv-emscripten/uv-src EMSDK_DIR=/path/to/uv-emscripten/emsdk ./scripts/build-uv.sh
-```
+The first run installs emsdk into `uv/emsdk`, checks out uv into `uv/uv-src` and
+applies `uv/patches/uv.patch`; then it builds the wasm into `dist/uv/`. A fresh build
+needs ~15 GB. To use an existing emsdk: `EMSDK_DIR=/path/to/emsdk ./scripts/build-uv.sh`.
 
 ## Tests
 
@@ -107,4 +120,4 @@ uv resolved, installed packages and `reinstall`, and the fallback without the uv
   match micropip's.
 
 See [docs/NOTES.md](docs/NOTES.md) for the results, the findings, and how the
-uv-emscripten patches could be upstreamed.
+patches to uv could be upstreamed.
