@@ -11,7 +11,9 @@ mod emscripten {
     use serde::{Deserialize, Serialize};
     use tracing_subscriber::prelude::*;
     use uv_client::{OwnedArchive, SimpleDetailMetadata};
-    use uv_configuration::{BuildOptions, Constraints, DependencyModifiers, TargetTriple};
+    use uv_configuration::{
+        BuildOptions, Constraints, DependencyModifiers, NoBinary, NoBuild, TargetTriple,
+    };
     use uv_distribution::ArchiveMetadata;
     use uv_distribution_types::{
         BuiltDist, Dist, IndexCapabilities, IndexLocations, IndexMetadata, InstalledDist,
@@ -345,7 +347,8 @@ mod emscripten {
             tags: tags.clone(),
             requires_python,
             allowed_yanks: AllowedYanks::from_manifest(&manifest, &environment, options.dependency_mode),
-            build_options: BuildOptions::default(),
+            // Wheels only: sdists can't be built here, and the result must name a wheel.
+            build_options: BuildOptions::new(NoBinary::None, NoBuild::All),
             index_locations: index_locations.clone(),
         };
         let index = InMemoryIndex::default();

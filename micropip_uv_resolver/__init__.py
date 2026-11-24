@@ -21,13 +21,12 @@ How it fits together:
   :class:`UvResolver` as its ``uv`` setting.
 - uv's index requests go to ``micropip://project/<name>/``. They are answered,
   through ``globalThis.__uvFetch``, with a PEP 691 page built from
-  ``micropip.sources.ordered_sources()``, so index URLs, Source plugins and the
-  lock file all work. Every other request (PEP 658 metadata) goes through the
-  compatibility layer, so custom layers and credentials apply.
-- Lock file packages are shown to uv as a virtual wheel tagged with the most
-  specific Pyodide tag, whose METADATA is built from ``LockedPackage.requires``.
-  micropip's "lock file first, then fall through" rule is expressed as uv
-  preferences for the lock file versions.
+  ``micropip.sources.ordered_sources()``, so index URLs and Source plugins
+  work. Every other request (PEP 658 metadata) goes through the compatibility
+  layer, so custom layers and credentials apply.
+- The lock file (``"PYODIDE"`` in the index URLs) is not used: packages come
+  only from the package indexes. If the index URLs have no package index, it
+  resolves with micropip's resolver.
 - Installed packages (``ResolveRequest.installed``) are passed as preferences,
   and packages whose installed version is resolved are skipped.
 - Requirements uv can't handle yet (direct URLs, ``emfs:``, ``file:``) and
@@ -40,7 +39,6 @@ import sysconfig
 from typing import Any
 
 from micropip._compat import CompatibilityLayer
-from micropip.package import PackageMetadata
 from micropip.resolution import Resolution, ResolveRequest
 from micropip.resolver import Resolver
 from micropip.sources import LockFileSource, ordered_sources
@@ -54,7 +52,6 @@ from micropip._vendored.packaging.src.packaging.version import Version
 __all__ = ["UvResolver", "is_supported", "load_uv"]
 
 PROJECT_PREFIX = "micropip://project"
-LOCK_PREFIX = "micropip://lockfile/"
 
 
 def is_supported(uv: Any | None) -> bool:
@@ -88,12 +85,6 @@ def _python_platform() -> str:
 
 def _python_version() -> str:
     return f"{sys.version_info.major}.{sys.version_info.minor}"
-
-
-def _best_tag() -> str:
-    """The most specific wheel tag of the runtime, e.g. ``cp314-cp314-pyemscripten_2026_0_wasm32``."""
-    cp = f"cp{sys.version_info.major}{sys.version_info.minor}"
-    return f"{cp}-{cp}-pyemscripten_{_abi_version()}_wasm32"
 
 
 def _is_url_requirement(requirement: str) -> bool:
@@ -131,7 +122,11 @@ class UvResolver(Resolver):
 
     async def resolve(self) -> Resolution:
         requirements = self.request.requirements
-        if not is_supported(self.uv) or any(_is_url_requirement(r) for r in requirements):
+        if (
+            not is_supported(self.uv)
+            or any(_is_url_requirement(r) for r in requirements)
+            or not self._index_groups()
+        ):
             return await super().resolve()
 
         from js import globalThis
@@ -148,7 +143,7 @@ class UvResolver(Resolver):
                         "pythonVersion": _python_version(),
                         "pythonPlatform": _python_platform(),
                         "indexUrl": PROJECT_PREFIX,
-                        "preferences": self._installed_preferences() + self._lockfile_preferences(),
+                        "preferences": self._installed_preferences(),
                     }
                 )
             )
@@ -172,7 +167,6 @@ class UvResolver(Resolver):
 
     def _to_resolution(self, result: dict) -> Resolution:
         wheels: list[WheelInfo] = []
-        lockfile_packages: list[PackageMetadata] = []
         included: set[str] = set()
         installed = self._installed()
 
@@ -188,24 +182,19 @@ class UvResolver(Resolver):
                 )
 
             included.add(canonicalize_name(name))
-            url = pkg.get("url") or ""
-            if url.startswith(LOCK_PREFIX):
-                lockfile_packages.append(PackageMetadata(name, version, "pyodide"))
-            else:
-                wheels.append(
-                    WheelInfo.from_package_index(
-                        name=name,
-                        filename=pkg["filename"],
-                        url=url,
-                        version=Version(version),
-                        sha256=pkg.get("sha256"),
-                        size=None,
-                    )
+            wheels.append(
+                WheelInfo.from_package_index(
+                    name=name,
+                    filename=pkg["filename"],
+                    url=pkg["url"],
+                    version=Version(version),
+                    sha256=pkg.get("sha256"),
+                    size=None,
                 )
+            )
 
         return Resolution(
             wheels=wheels,
-            lockfile_packages=lockfile_packages,
             reinstall=self.request.reinstall,
             fetch_options=self.request.fetch_options,
             requested_by=self._requested_by(result, included),
@@ -238,18 +227,6 @@ class UvResolver(Resolver):
             return []
         return [{"name": n, "version": v} for n, v in self._installed().items()]
 
-    def _lock_first(self) -> bool:
-        """Whether the lock file comes before any index in micropip's source order."""
-        items = ordered_sources(self.request.index_urls)
-        return bool(items) and isinstance(items[0], LockFileSource)
-
-    def _lockfile_preferences(self) -> list[dict]:
-        """Prefer lock file versions if the lock file comes first, like micropip does."""
-        lockfile = self.compat_layer.lockfile
-        if lockfile is None or not self._lock_first():
-            return []
-        return [{"name": locked.name, "version": locked.version} for locked in lockfile]
-
     # -- uv's requests -----------------------------------------------------------
 
     async def _uv_fetch(self, url: str, accept: str) -> Any:
@@ -263,76 +240,50 @@ class UvResolver(Resolver):
                     return _to_js({"status": 404, "body": b""})
                 return _to_js({"status": 200, "body": json.dumps(page).encode()})
 
-            if url.startswith(LOCK_PREFIX) and url.endswith(".metadata"):
-                return _to_js({"status": 200, "body": self._locked_metadata(url)})
-
             response = await self.fetch(url, {"accept": accept})
             return _to_js({"status": response.status, "body": response.content})
         except Exception:
             return _to_js({"status": 404, "body": b""})
 
-    def _locked_file(self, locked: Any) -> dict:
-        # The most specific tag, so that uv picks this virtual wheel over an index
-        # wheel of the same version.
-        filename = f"{locked.name.replace('-', '_')}-{locked.version}-{_best_tag()}.whl"
-        return {
-            "filename": filename,
-            "url": LOCK_PREFIX + filename,
-            "hashes": {},
-            "core-metadata": True,
-        }
+    def _index_groups(self) -> list:
+        """The source groups of the request, in micropip's order, without the lock file."""
+        return [
+            item
+            for item in ordered_sources(self.request.index_urls)
+            if not isinstance(item, LockFileSource)
+        ]
 
     async def _project_page(self, name: str) -> dict | None:
         """
-        The project as PEP 691 JSON, for uv.
-
-        The files come from the first source group (in micropip's order) that has
-        the project. If the lock file has the project too, its version is added as
-        a virtual wheel: preferred if the lock file comes first (see
-        _lockfile_preferences), or only used if no index has the project otherwise.
+        The project as PEP 691 JSON, for uv: the files of the first source group
+        (in micropip's order) that has the project. The lock file is skipped.
         """
-        lockfile = self.compat_layer.lockfile
-        locked = lockfile.get(name) if lockfile is not None else None
-
-        page = None
-        for item in ordered_sources(self.request.index_urls):
-            if isinstance(item, LockFileSource):
-                continue
-            for source in item:
+        for group in self._index_groups():
+            for source in group:
                 page = await source.get_project(name, self.fetch)
                 if page is not None:
                     break
-            if page is not None:
-                break
-
-        files: list[dict] = []
-        versions: list[str] = []
-        if page is not None:
-            versions = list(page.versions)
-            files = [
-                {
-                    "filename": f.filename,
-                    "url": f.url,
-                    "hashes": f.hashes,
-                    "core-metadata": f.core_metadata or False,
-                    "yanked": f.yanked,
-                    "requires-python": f.requires_python,
-                    "size": f.size,
-                }
-                for f in page.files
-            ]
-        if locked is not None and (self._lock_first() or page is None):
-            files.append(self._locked_file(locked))
-            versions.append(locked.version)
-
-        if not files:
+            else:
+                continue
+            break
+        else:
             return None
-        return {"meta": {"api-version": "1.1"}, "name": name, "versions": versions, "files": files}
 
-    def _locked_metadata(self, url: str) -> bytes:
-        filename = url[len(LOCK_PREFIX) : -len(".metadata")]
-        dist_name, version = filename.split("-")[:2]
-        locked = self.compat_layer.lockfile.get(canonicalize_name(dist_name))
-        lines = ["Metadata-Version: 2.1", f"Name: {locked.name}", f"Version: {version}"]
-        lines += [f"Requires-Dist: {req}" for req in locked.requires]
-        return ("\n".join(lines) + "\n").encode()
+        files = [
+            {
+                "filename": f.filename,
+                "url": f.url,
+                "hashes": f.hashes,
+                "core-metadata": f.core_metadata or False,
+                "yanked": f.yanked,
+                "requires-python": f.requires_python,
+                "size": f.size,
+            }
+            for f in page.files
+        ]
+        return {
+            "meta": {"api-version": "1.1"},
+            "name": name,
+            "versions": list(page.versions),
+            "files": files,
+        }

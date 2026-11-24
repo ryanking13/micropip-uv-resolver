@@ -9,13 +9,19 @@ only decides which ones.
 
 Unlike micropip's built-in resolver, uv backtracks. For example, for
 `["fastapi==0.110.0", "starlette>=0.36"]` it picks `starlette 0.36.3` for both, where
-micropip's resolver keeps Pyodide's newer starlette and warns.
+micropip's resolver keeps the newest starlette and warns.
+
+`UvResolver` resolves from **package indexes only**: it doesn't use Pyodide's lock file
+(`"PYODIDE"` in the index URLs is skipped). Packages need a pure Python or
+`pyemscripten_2026_0` wheel on the index; e.g. `requests` and `pydantic` work from PyPI
+(charset-normalizer and pydantic-core publish pyemscripten wheels), `numpy` and
+`markupsafe` don't.
 
 ## Requirements
 
 - **micropip main** (unreleased): needs the resolver contract (`Client.resolver`,
-  `ResolveRequest`, `Resolution`), `micropip.sources.ordered_sources()`,
-  `LockFile.__iter__` and `ResolveRequest.installed`.
+  `ResolveRequest`, `Resolution`), `micropip.sources.ordered_sources()` and
+  `ResolveRequest.installed`.
 - A runtime with **WebAssembly JSPI** (`WebAssembly.Suspending`): recent Chrome, Node.js 25+.
 - **Pyodide 314** (Python 3.14, `pyemscripten_2026_0`) or later. Older Pyodide versions
   are not supported. uv doesn't know this platform yet; `uv/patches/uv.patch` adds
@@ -39,18 +45,17 @@ micropip creates a resolver for each request, so the uv module is passed with
 `micropip.Client(resolver=functools.partial(UvResolver, uv=uv))`.
 
 `UvResolver` falls back to micropip's resolver without the uv module (`uv=None`) or when JSPI
-isn't available, and for requirements uv can't handle yet (direct URLs, `emfs:`, `file:`).
+isn't available, for requirements uv can't handle yet (direct URLs, `emfs:`, `file:`), and
+when the index URLs have no package index (e.g. `index_urls=["PYODIDE"]`).
 
 How it works:
 
 - uv's index requests are answered with pages built from micropip's
-  `ordered_sources(index_urls)`, so index URLs, `micropip.sources.Source` plugins and
-  `"PYODIDE"` work as with micropip's resolver. Other requests (PEP 658 metadata) go
-  through micropip's compatibility layer, so custom layers and `credentials` apply.
-- Lock file packages are shown to uv as virtual wheels whose metadata comes from
-  `LockedPackage.requires`. When the lock file comes first (the default), its versions
-  are uv **preferences**: used when they satisfy the requirements, otherwise uv falls
-  back to the index (micropip's rule from micropip#314).
+  `ordered_sources(index_urls)` (without the lock file), so index URLs and
+  `micropip.sources.Source` plugins work as with micropip's resolver. Other requests
+  (PEP 658 metadata) go through micropip's compatibility layer, so custom layers and
+  `credentials` apply.
+- uv only considers wheels (no sdists), since nothing can be built here.
 - Installed packages (`ResolveRequest.installed`) are preferences too; packages that are
   already installed at the resolved version are skipped, and a different version raises
   "already installed" unless `reinstall=True`, like micropip.
@@ -97,14 +102,15 @@ node tests/fetch-error.mjs                                 # the uv module alone
 ```
 
 `tests/scenarios.py` resolves the same requirements with uv and with micropip's
-resolver and checks the results: packages from PyPI, the lock file first,
-`index_urls=["PYODIDE"]`, a case that needs backtracking, installing and importing what
-uv resolved, installed packages and `reinstall`, and the fallback without the uv module.
+resolver, from PyPI only, and checks the results: pure Python packages and pyemscripten
+wheels on PyPI, a case that needs backtracking, a package without a usable wheel, that
+the lock file isn't used, installing and importing what uv resolved, installed packages
+and `reinstall`, and the fallback without the uv module.
 `tests/fetch-error.mjs` checks that the uv module still works after the host fetch throws.
 
 ## Known limitations
 
-- **Slower** than micropip's resolver (3–4x in the scenarios): fetches are sequential
+- **Slower** than micropip's resolver (2–3x in the scenarios): fetches are sequential
   (prefetching is disabled on Emscripten, and each fetch suspends the wasm stack), and
   each one crosses wasm → JS → Python.
 - **Wheels without PEP 658 metadata** are reported as unavailable by the PoC (range
@@ -114,9 +120,12 @@ uv resolved, installed packages and `reinstall`, and the fallback without the uv
   `panic = "abort"`): later calls fail with `RuntimeError: unreachable` until the page
   or process is reloaded. Failed fetches don't cause this: `fetch.js` turns a JS
   exception into a failed fetch instead of throwing it into wasm.
-- The lock file rule is approximated with preferences (see above), and lock file
-  packages are resolved by uv (including their dependencies), where micropip leaves
-  those to `pyodide.loadPackage`.
+- **No lock file**: packages that only Pyodide's lock file provides (e.g. `numpy`,
+  `markupsafe`, so also `flask`) can't be resolved with `UvResolver` from PyPI.
+- **uv hangs on some packages without a usable wheel**: resolving `regex` from PyPI
+  (376 versions, none with a usable wheel) never finishes, while smaller version ranges
+  and other packages (`markupsafe`, `numpy`) fail with "no usable wheels" as expected.
+  Not investigated yet.
 - Uses micropip's vendored `packaging` (`micropip._vendored...`) so that `Version` types
   match micropip's.
 

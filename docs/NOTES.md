@@ -17,25 +17,27 @@ preferences) and `ResolveRequest.installed` (#328, used for installed packages).
 - Changes to the uv-emscripten PoC for micropip (in `uv/crates/uv-resolver-wasm` and `uv/web/uv-resolver.mjs`, nothing in uv):
   - input: `index_url` (instead of hard-coded PyPI), `preferences`
   - output: the selected wheel's `url`, `filename`, `sha256`
-  - `fetch.js` calls a host-provided `globalThis.__uvFetch(url, accept)` if present
+  - `fetch.js` calls a host-provided `globalThis.__uvFetch(url, accept)` if present, and never throws into wasm
+  - wheels only (`NoBuild::All`): an sdist can't be built here, and was otherwise selected without metadata
 - micropip side (`UvResolver`):
   - uv's index URL is `micropip://project`. micropip answers `micropip://project/<name>/` with a PEP 691 page built from `micropip.sources.ordered_sources()` (so Source plugins work), and every other request goes through `compat_layer.fetch()` (so custom compat layers and credentials work).
-  - Lock file packages are shown as a virtual wheel tagged with the most specific Pyodide tag, whose METADATA is built from `LockedPackage.requires`.
-  - micropip's "lock file first, fall through if no satisfying version" rule (#314) is expressed as uv **preferences** for the lock file versions, plus a page that has both the lock file version and the index files.
-  - uv's output becomes a `Resolution` (wheels not downloaded; lock file packages; `requested_by` from uv's graph). micropip's `install_resolution()` installs it unchanged.
+  - **The lock file is not used**: `"PYODIDE"` is skipped in the index URLs, and with no package index left it falls back to micropip's resolver. An earlier version showed lock file packages to uv as virtual wheels and expressed micropip's "lock file first" rule (#314) as uv preferences; that only approximated micropip's behavior (uv also resolved the lock file packages' dependencies, which micropip leaves to `pyodide.loadPackage`), so it was dropped.
+  - uv's output becomes a `Resolution` (wheels not downloaded; `requested_by` from uv's graph). micropip's `install_resolution()` installs it unchanged.
 
 ## Results (node 25, Pyodide 314.0.8)
 
 Only Pyodide 314 (Python 3.14, `pyemscripten_2026_0`) and later are supported. An earlier
-run on Pyodide 0.29.5 found the greedy resolver bugs below (fixed in micropip#326).
+run on Pyodide 0.29.5 (with the lock file) found the greedy resolver bugs below (fixed in micropip#326).
+Both resolvers use `index_urls=["PYPI"]`:
 
 | Scenario | uv | micropip (greedy) |
 |---|---|---|
-| `flask`, `httpx` | same packages, 1.2 s | same packages, 0.5 s |
-| `regex`, `attrs` (lock file) | lock file versions, also lists `six` (follows `LockedPackage.requires`) | lock file versions (`loadPackage` resolves `six` itself) |
-| `index_urls=["PYODIDE"]`, `numpy` | same | same |
-| `fastapi==0.110.0`, `starlette>=0.36` | **consistent**: starlette 0.36.3 from PyPI (the lock file has 1.0.0, which fastapi doesn't allow), the rest (including anyio 4.13.0) from the lock file, 0.9 s | keeps the lock file's starlette 1.0.0 and warns |
-| install + import `requests`, `regex` | works | — |
+| `requests`, `httpx` | same packages (charset-normalizer: pyemscripten wheel on PyPI), 1.8 s | same, 0.7 s |
+| `pydantic` | same packages (pydantic-core: pyemscripten wheel on PyPI), 0.8 s | same, 0.5 s |
+| `fastapi==0.110.0`, `starlette>=0.36` | **consistent**: starlette 0.36.3, 1.8 s | keeps starlette 1.10.0 and warns, 0.8 s |
+| `markupsafe` | "no usable wheels" (only native wheels and an sdist) | — |
+| `regex` | **hangs** (see finding 8) | — |
+| install + import `requests` | works | — |
 
 ## Findings
 
@@ -47,12 +49,13 @@ run on Pyodide 0.29.5 found the greedy resolver bugs below (fixed in micropip#32
 
    Both fixed in micropip#326 (a conflict now keeps the first selection with a warning).
 3. ~~Installed packages~~ Done: `ResolveRequest.installed` (micropip#328). They are passed to uv as preferences; a resolved version that differs from the installed one raises "already installed" unless `reinstall=True`, like micropip.
-4. **Performance**: uv is 3–4x slower here. Fetches are sequential (prefetching is disabled on emscripten in the patch, and each fetch suspends the wasm stack), and each one crosses wasm → JS → Python.
+4. **Performance**: uv is 2–3x slower here. Fetches are sequential (prefetching is disabled on emscripten in the patch, and each fetch suspends the wasm stack), and each one crosses wasm → JS → Python.
 
 ### For the PoC
 5. ~~**The module is unusable after a JS exception.**~~ Fixed in `fetch.js`. A JS exception thrown into wasm unwound the Rust frames without running destructors (`panic = "abort"`, so there are no landing pads). futures' `block_on` stayed marked as entered, the next call panicked with "cannot execute `LocalPool` executor from within another executor", the module aborted, and every later call failed with `RuntimeError: unreachable`. `fetch.js` now returns a null body (a failed fetch) instead of throwing; `tests/fetch-error.mjs` covers it. A panic inside uv still aborts the module; building with `panic = "unwind"` and `catch_unwind` in `uv_resolve`, or re-creating the module, would handle that.
 6. ~~**Preferences aren't always honored**~~ (Pyodide 0.29 only). On 0.29.5, `anyio` came from PyPI (4.14.2) although the lock file's 4.9.0 satisfies the requirements. uv did pick 4.9.0 first, but its lock file dependencies go `anyio` → `ssl` (an unvendored stdlib module) → `libopenssl` (a shared library), and `libopenssl`'s version `1.1.1w` isn't PEP 440, so uv couldn't read its virtual wheel and backtracked out of `ssl` and `anyio` 4.9.0. Pyodide 314's lock file has no stdlib modules and no versions that aren't PEP 440, so this doesn't happen there.
 7. Wheels without PEP 658 metadata are still "unavailable" (range requests are compiled in but the provider doesn't use them). micropip's side is ready (`FetchOptions.headers` for `Range`, `FetchResponse.status` for 206, #321).
+8. **uv hangs on `regex` from PyPI.** regex has 376 versions and none has a usable wheel (native wheels, sdists, and versions like `2013-02-16`). uv rules them out one by one, then stops after `0.1.20110623a0` with no further events and no CPU use: the resolve promise never settles. `regex<0.1.20110624`, `regex>=2013.1`, `markupsafe` and `numpy` all end with a normal "no usable wheels" error. Likely a wait in the patched async solver (or its error reporting) for something that is never fetched. Not investigated yet.
 
 ## Upstreaming the PoC's patches
 
