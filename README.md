@@ -17,7 +17,9 @@ micropip's resolver keeps Pyodide's newer starlette and warns.
   `ResolveRequest`, `Resolution`), `micropip.sources.ordered_sources()`,
   `LockFile.__iter__` and `ResolveRequest.installed`.
 - A runtime with **WebAssembly JSPI** (`WebAssembly.Suspending`): recent Chrome, Node.js 25+.
-- Pyodide 2025 (Python 3.13) was tested.
+- **Pyodide 314** (Python 3.14, `pyemscripten_2026_0`) or later. Older Pyodide versions
+  are not supported. uv doesn't know this platform yet; `uv/patches/uv.patch` adds
+  `wasm32-pyodide2026`.
 
 ## Usage
 
@@ -89,7 +91,8 @@ needs ~15 GB. To use an existing emsdk: `EMSDK_DIR=/path/to/emsdk ./scripts/buil
 ```sh
 MICROPIP_DIR=/path/to/micropip ./scripts/build-wheels.sh   # micropip (main) + this package
 ./scripts/build-uv.sh
-PYODIDE_DIR=/path/to/pyodide-0.29.5 node tests/run.mjs
+./scripts/get-pyodide.sh                                   # Pyodide 314 (npm package) into build/pyodide
+node tests/run.mjs                                         # or PYODIDE_DIR=/path/to/pyodide
 node tests/fetch-error.mjs                                 # the uv module alone
 ```
 
@@ -104,8 +107,6 @@ uv resolved, installed packages and `reinstall`, and the fallback without the uv
 - **Slower** than micropip's resolver (3–4x in the scenarios): fetches are sequential
   (prefetching is disabled on Emscripten, and each fetch suspends the wasm stack), and
   each one crosses wasm → JS → Python.
-- **Preferences aren't always honored**: e.g. `anyio` comes from PyPI although the lock
-  file version satisfies the requirements. Not investigated yet.
 - **Wheels without PEP 658 metadata** are reported as unavailable by the PoC (range
   requests are compiled in but not used). micropip's side is ready (`FetchResponse.status`,
   `FetchOptions.headers`).

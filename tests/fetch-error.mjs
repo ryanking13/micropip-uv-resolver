@@ -30,7 +30,7 @@ const onEvent = (event) => {
 function resolveSix() {
   return uv.resolve({
     requirements: ["six"],
-    pythonVersion: "3.13",
+    pythonVersion: "3.14",
     indexUrl: "https://pypi.org/simple",
     onEvent,
   });

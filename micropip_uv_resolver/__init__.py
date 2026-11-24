@@ -77,13 +77,12 @@ async def load_uv(url: str) -> Any:
 
 
 def _abi_version() -> str:
-    return sysconfig.get_config_var("PYEMSCRIPTEN_PLATFORM_VERSION") or sysconfig.get_config_var(
-        "PYODIDE_ABI_VERSION"
-    )
+    """The PyEmscripten platform version of the runtime, e.g. ``2026_0`` (Pyodide 314)."""
+    return sysconfig.get_config_var("PYEMSCRIPTEN_PLATFORM_VERSION")
 
 
 def _python_platform() -> str:
-    """uv's name for the Pyodide platform, e.g. ``wasm32-pyodide2025``."""
+    """uv's name for the Pyodide platform, e.g. ``wasm32-pyodide2026``."""
     return f"wasm32-pyodide{_abi_version().split('_')[0]}"
 
 
@@ -92,7 +91,7 @@ def _python_version() -> str:
 
 
 def _best_tag() -> str:
-    """The most specific wheel tag of the runtime, e.g. ``cp313-cp313-pyemscripten_2025_0_wasm32``."""
+    """The most specific wheel tag of the runtime, e.g. ``cp314-cp314-pyemscripten_2026_0_wasm32``."""
     cp = f"cp{sys.version_info.major}{sys.version_info.minor}"
     return f"{cp}-{cp}-pyemscripten_{_abi_version()}_wasm32"
 

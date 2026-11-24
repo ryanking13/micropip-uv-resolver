@@ -24,14 +24,17 @@ preferences) and `ResolveRequest.installed` (#328, used for installed packages).
   - micropip's "lock file first, fall through if no satisfying version" rule (#314) is expressed as uv **preferences** for the lock file versions, plus a page that has both the lock file version and the index files.
   - uv's output becomes a `Resolution` (wheels not downloaded; lock file packages; `requested_by` from uv's graph). micropip's `install_resolution()` installs it unchanged.
 
-## Results (node 25, Pyodide 0.29.5)
+## Results (node 25, Pyodide 314.0.8)
+
+Only Pyodide 314 (Python 3.14, `pyemscripten_2026_0`) and later are supported. An earlier
+run on Pyodide 0.29.5 found the greedy resolver bugs below (fixed in micropip#326).
 
 | Scenario | uv | micropip (greedy) |
 |---|---|---|
-| `flask`, `httpx` | same packages, 1.3 s | 0.5 s; **lists `markupsafe` (lock file) twice** |
+| `flask`, `httpx` | same packages, 1.2 s | same packages, 0.5 s |
 | `regex`, `attrs` (lock file) | lock file versions, also lists `six` (follows `LockedPackage.requires`) | lock file versions (`loadPackage` resolves `six` itself) |
 | `index_urls=["PYODIDE"]`, `numpy` | same | same |
-| `fastapi==0.110.0`, `starlette>=0.36` | **consistent**: starlette 0.36.3 from PyPI (lock file has 0.47.2, which fastapi doesn't allow), the rest mostly from the lock file, 1.8 s | **installs two starlette versions** (0.36.3 and 0.47.2) |
+| `fastapi==0.110.0`, `starlette>=0.36` | **consistent**: starlette 0.36.3 from PyPI (the lock file has 1.0.0, which fastapi doesn't allow), the rest (including anyio 4.13.0) from the lock file, 0.9 s | keeps the lock file's starlette 1.0.0 and warns |
 | install + import `requests`, `regex` | works | — |
 
 ## Findings
@@ -48,7 +51,7 @@ preferences) and `ResolveRequest.installed` (#328, used for installed packages).
 
 ### For the PoC
 5. ~~**The module is unusable after a JS exception.**~~ Fixed in `fetch.js`. A JS exception thrown into wasm unwound the Rust frames without running destructors (`panic = "abort"`, so there are no landing pads). futures' `block_on` stayed marked as entered, the next call panicked with "cannot execute `LocalPool` executor from within another executor", the module aborted, and every later call failed with `RuntimeError: unreachable`. `fetch.js` now returns a null body (a failed fetch) instead of throwing; `tests/fetch-error.mjs` covers it. A panic inside uv still aborts the module; building with `panic = "unwind"` and `catch_unwind` in `uv_resolve`, or re-creating the module, would handle that.
-6. **Preferences aren't always honored**: `anyio` came from PyPI (4.14.2) although the lock file's 4.9.0 satisfies the requirements; `pydantic`, `idna`, ... did use lock file versions. Not investigated yet.
+6. ~~**Preferences aren't always honored**~~ (Pyodide 0.29 only). On 0.29.5, `anyio` came from PyPI (4.14.2) although the lock file's 4.9.0 satisfies the requirements. uv did pick 4.9.0 first, but its lock file dependencies go `anyio` → `ssl` (an unvendored stdlib module) → `libopenssl` (a shared library), and `libopenssl`'s version `1.1.1w` isn't PEP 440, so uv couldn't read its virtual wheel and backtracked out of `ssl` and `anyio` 4.9.0. Pyodide 314's lock file has no stdlib modules and no versions that aren't PEP 440, so this doesn't happen there.
 7. Wheels without PEP 658 metadata are still "unavailable" (range requests are compiled in but the provider doesn't use them). micropip's side is ready (`FetchOptions.headers` for `Range`, `FetchResponse.status` for 206, #321).
 
 ## Upstreaming the PoC's patches
@@ -68,23 +71,27 @@ preferences) and `ResolveRequest.installed` (#328, used for installed packages).
 | `reqsign-core` | duplicate `home_dir` (same cfg overlap); `jwt` gated off wasm32 although it builds | apache/opendal (reqsign) |
 | `wasmtimer` | newer wasm-bindgen needs `UnwindSafe` closures → `AssertUnwindSafe` | wasmtimer-rs; not emscripten-specific |
 
-### 3. uv: making the resolver usable from a custom provider (good case for upstream)
+### 3. uv: the Pyodide 2026 platform (small, independent)
+- `wasm32-pyodide2026` target triple (Pyodide 314, Python 3.14), mapped to `Os::PyEmscripten { major: 2026, minor: 0 }`, which uv already has with its tags (`pyemscripten_2026_0_wasm32`). Emscripten 5.0.3 for the markers. Also in `uv.schema.json`. Upstream uv main only has 2024 and 2025.
+
+### 4. uv: making the resolver usable from a custom provider (good case for upstream)
 - `RegistryClient::from_pypi_files` (`SimpleDetailMetadata::from_pypi_files`), `OwnedArchive::from_unarchived`, `VersionMap::from_simple_metadata` made `pub`.
 - uv already has `Resolver::new_custom_io` for custom I/O, but a custom `ResolverProvider` can't build a `VersionMap` from an index page without these. That's an argument for upstreaming independent of wasm: "make `new_custom_io` usable".
 
-### 4. uv: compiling for emscripten (plausible, needs a CI target)
+### 5. uv: compiling for emscripten (plausible, needs a CI target)
 - `tokio` `process`/`signal` and `nix` features moved to target-specific deps (`uv-auth`, `uv-build-frontend`, `uv-installer`, `uv`, `uv-unix`); the subprocess keyring provider stubbed on emscripten.
 - `#[async_trait]` → `async_trait(?Send)` on emscripten for the auth and client middleware (single-threaded runtime).
 - Small, cfg-gated, no behavior change on native. Likely acceptable if uv wants to keep emscripten building, which would need a CI job to not regress.
 
-### 5. uv: running the solver without a thread (hardest; needs design discussion)
+### 6. uv: running the solver without a thread (hardest; needs design discussion)
 - The patch makes `solve`, `choose_version*`, `get_dependencies*` `async` **on all targets**, replaces `wait_blocking()` with an async `wait()`, runs the solver in-task on emscripten (no thread), and disables prefetching there. On native it keeps the thread and wraps `solve` in `block_on`.
 - Touches uv's hot path; maintainers would need to accept async in the solver (or a cfg'd variant, which duplicates code). Best started as an issue describing the use case (micropip/Pyodide), with numbers showing no native regression.
 - Disabling prefetching is a big part of the slowness in finding 4; a single-threaded prefetch (spawn_local) would be a follow-up.
 
 ### Suggested order
-1. Vendored crate PRs (astral-sh ones first)
-2. uv: public constructors for custom providers (useful beyond wasm)
-3. uv: cfg gates / `?Send` for emscripten, with a CI build job
-4. uv: async solver — open an issue first
-5. Drop git forks as tokio/mio/libc release emscripten support
+1. uv: the `wasm32-pyodide2026` target (needed to run on Pyodide 314 at all)
+2. Vendored crate PRs (astral-sh ones first)
+3. uv: public constructors for custom providers (useful beyond wasm)
+4. uv: cfg gates / `?Send` for emscripten, with a CI build job
+5. uv: async solver — open an issue first
+6. Drop git forks as tokio/mio/libc release emscripten support

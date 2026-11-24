@@ -8,7 +8,7 @@ version = "0.0.1"
 description = "Experimental micropip resolver backed by uv's resolver compiled to Emscripten"
 readme = "README.md"
 license = { file = "LICENSE" }
-requires-python = ">=3.13"
+requires-python = ">=3.14"
 # Needs micropip's resolver contract (Client.resolver, ResolveRequest,
 # Resolution, sources.ordered_sources, LockFile.__iter__, ResolveRequest.installed),
 # which is on micropip main and not released yet.

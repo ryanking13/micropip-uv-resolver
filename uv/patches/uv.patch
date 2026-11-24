@@ -472,6 +472,94 @@ index af64b4f..d07d7fe 100644
          let raw = rkyv::to_bytes::<rancor::Error>(unarchived)
              .map_err(|e| ErrorKind::ArchiveWrite(e.to_string()))?;
          Ok(Self {
+diff --git a/crates/uv-configuration/src/target_triple.rs b/crates/uv-configuration/src/target_triple.rs
+index 31681a0..519b688 100644
+--- a/crates/uv-configuration/src/target_triple.rs
++++ b/crates/uv-configuration/src/target_triple.rs
+@@ -711,6 +711,12 @@ pub enum TargetTriple {
+     #[cfg_attr(feature = "clap", value(name = "wasm32-pyodide2025"))]
+     Wasm32Pyodide2025,
+ 
++    /// A wasm32 target using the Pyodide 2026 platform (`pyemscripten_2026_0`). Meant for use
++    /// with Python 3.14.
++    /// See <https://pyodide.org/en/stable/development/abi/314.html>
++    #[cfg_attr(feature = "clap", value(name = "wasm32-pyodide2026"))]
++    Wasm32Pyodide2026,
++
+     /// An ARM64 target for iOS device
+     ///
+     /// By default, iOS 13.0 is used, but respects the `IPHONEOS_DEPLOYMENT_TARGET`
+@@ -1218,6 +1224,13 @@ impl TargetTriple {
+                 },
+                 Arch::Wasm32,
+             ),
++            Self::Wasm32Pyodide2026 => Platform::new(
++                Os::PyEmscripten {
++                    major: 2026,
++                    minor: 0,
++                },
++                Arch::Wasm32,
++            ),
+             Self::Aarch64LinuxAndroid => {
+                 let api_level = android_api_level().map_or(24, |api_level| {
+                     debug!("Found Android API level: {}", api_level);
+@@ -1354,6 +1367,7 @@ impl TargetTriple {
+             Self::X8664LinuxAndroid => "x86_64",
+             Self::Wasm32Pyodide2024 => "wasm32",
+             Self::Wasm32Pyodide2025 => "wasm32",
++            Self::Wasm32Pyodide2026 => "wasm32",
+             Self::Arm64Ios => "arm64",
+             Self::Arm64IosSimulator => "arm64",
+             Self::X8664IosSimulator => "x86_64",
+@@ -1437,6 +1451,7 @@ impl TargetTriple {
+             Self::X8664LinuxAndroid => "Android",
+             Self::Wasm32Pyodide2024 => "Emscripten",
+             Self::Wasm32Pyodide2025 => "Emscripten",
++            Self::Wasm32Pyodide2026 => "Emscripten",
+             Self::Arm64Ios => "iOS",
+             Self::Arm64IosSimulator => "iOS",
+             Self::X8664IosSimulator => "iOS",
+@@ -1523,6 +1538,7 @@ impl TargetTriple {
+             // It doesn't really seem to mean anything? But for completeness we include it here.
+             Self::Wasm32Pyodide2024 => "#1",
+             Self::Wasm32Pyodide2025 => "#1",
++            Self::Wasm32Pyodide2026 => "#1",
+             Self::Arm64Ios => "",
+             Self::Arm64IosSimulator => "",
+             Self::X8664IosSimulator => "",
+@@ -1609,6 +1625,8 @@ impl TargetTriple {
+             Self::Wasm32Pyodide2024 => "3.1.58",
+             // See https://pyodide.org/en/stable/development/abi/313.html
+             Self::Wasm32Pyodide2025 => "4.0.9",
++            // See https://pyodide.org/en/stable/development/abi/314.html
++            Self::Wasm32Pyodide2026 => "5.0.3",
+             Self::Arm64Ios => "",
+             Self::Arm64IosSimulator => "",
+             Self::X8664IosSimulator => "",
+@@ -1692,6 +1710,7 @@ impl TargetTriple {
+             Self::X8664LinuxAndroid => "posix",
+             Self::Wasm32Pyodide2024 => "posix",
+             Self::Wasm32Pyodide2025 => "posix",
++            Self::Wasm32Pyodide2026 => "posix",
+             Self::Arm64Ios => "posix",
+             Self::Arm64IosSimulator => "posix",
+             Self::X8664IosSimulator => "posix",
+@@ -1775,6 +1794,7 @@ impl TargetTriple {
+             Self::X8664LinuxAndroid => "android",
+             Self::Wasm32Pyodide2024 => "emscripten",
+             Self::Wasm32Pyodide2025 => "emscripten",
++            Self::Wasm32Pyodide2026 => "emscripten",
+             Self::Arm64Ios => "ios",
+             Self::Arm64IosSimulator => "ios",
+             Self::X8664IosSimulator => "ios",
+@@ -1858,6 +1878,7 @@ impl TargetTriple {
+             Self::X8664LinuxAndroid => false,
+             Self::Wasm32Pyodide2024 => false,
+             Self::Wasm32Pyodide2025 => false,
++            Self::Wasm32Pyodide2026 => false,
+             Self::Arm64Ios => false,
+             Self::Arm64IosSimulator => false,
+             Self::X8664IosSimulator => false,
 diff --git a/crates/uv-installer/Cargo.toml b/crates/uv-installer/Cargo.toml
 index fb4a44e..5c92615 100644
 --- a/crates/uv-installer/Cargo.toml
@@ -816,3 +904,19 @@ index 301db50..cc28c07 100644
  uv-unix = { workspace = true }
  
  [features]
+diff --git a/uv.schema.json b/uv.schema.json
+index 8881c68..50d2911 100644
+--- a/uv.schema.json
++++ b/uv.schema.json
+@@ -2730,6 +2730,11 @@
+           "type": "string",
+           "const": "wasm32-pyodide2025"
+         },
++        {
++          "description": "A wasm32 target using the Pyodide 2026 platform (`pyemscripten_2026_0`). Meant for use\nwith Python 3.14.\nSee <https://pyodide.org/en/stable/development/abi/314.html>",
++          "type": "string",
++          "const": "wasm32-pyodide2026"
++        },
+         {
+           "description": "An ARM64 target for iOS device\n\nBy default, iOS 13.0 is used, but respects the `IPHONEOS_DEPLOYMENT_TARGET`\nenvironment variable if set.",
+           "type": "string",
