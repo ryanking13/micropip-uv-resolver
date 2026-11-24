@@ -254,8 +254,8 @@ class UvResolver(Resolver):
     # -- uv's requests -----------------------------------------------------------
 
     async def _uv_fetch(self, url: str, accept: str) -> Any:
-        # Never raise: an exception thrown through uv's JSPI call leaves the
-        # wasm instance unusable.
+        # Never raise: report failures as a failed fetch, like fetch.js does
+        # for JS exceptions, so that uv gets a normal result.
         try:
             if url.startswith(PROJECT_PREFIX + "/"):
                 name = url[len(PROJECT_PREFIX) + 1 :].strip("/")

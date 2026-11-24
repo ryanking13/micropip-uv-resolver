@@ -47,7 +47,7 @@ preferences) and `ResolveRequest.installed` (#328, used for installed packages).
 4. **Performance**: uv is 3–4x slower here. Fetches are sequential (prefetching is disabled on emscripten in the patch, and each fetch suspends the wasm stack), and each one crosses wasm → JS → Python.
 
 ### For the PoC
-5. **The module is unusable after a JS exception.** An exception thrown through a JSPI call left the instance trapped; every later call failed with `RuntimeError: unreachable`. `fetch.js` should never throw (return status 0 instead), or the module should be re-created after a failure.
+5. ~~**The module is unusable after a JS exception.**~~ Fixed in `fetch.js`. A JS exception thrown into wasm unwound the Rust frames without running destructors (`panic = "abort"`, so there are no landing pads). futures' `block_on` stayed marked as entered, the next call panicked with "cannot execute `LocalPool` executor from within another executor", the module aborted, and every later call failed with `RuntimeError: unreachable`. `fetch.js` now returns a null body (a failed fetch) instead of throwing; `tests/fetch-error.mjs` covers it. A panic inside uv still aborts the module; building with `panic = "unwind"` and `catch_unwind` in `uv_resolve`, or re-creating the module, would handle that.
 6. **Preferences aren't always honored**: `anyio` came from PyPI (4.14.2) although the lock file's 4.9.0 satisfies the requirements; `pydantic`, `idna`, ... did use lock file versions. Not investigated yet.
 7. Wheels without PEP 658 metadata are still "unavailable" (range requests are compiled in but the provider doesn't use them). micropip's side is ready (`FetchOptions.headers` for `Range`, `FetchResponse.status` for 206, #321).
 

@@ -1,8 +1,8 @@
 diff --git i/crates/uv-resolver-wasm/src/fetch.js w/crates/uv-resolver-wasm/src/fetch.js
-index 4eb6669..d500a1d 100644
+index 4eb6669..ffb6d35 100644
 --- i/crates/uv-resolver-wasm/src/fetch.js
 +++ w/crates/uv-resolver-wasm/src/fetch.js
-@@ -11,18 +11,27 @@ addToLibrary({
+@@ -11,23 +11,39 @@ addToLibrary({
  
      emit({ type: "fetch-start", id, url, kind });
      try {
@@ -34,6 +34,30 @@ index 4eb6669..d500a1d 100644
          bytes: bytes.length,
          ms: performance.now() - startedAt,
        });
+       return output;
+     } catch (error) {
++      // Never throw into wasm: a JS exception unwinds the Rust frames without
++      // running their destructors (the build uses panic = "abort"), which
++      // leaves the module's state broken (e.g. futures' block_on still marked
++      // as entered) and makes every later call abort. Return a null body
++      // instead; the Rust side treats it as a failed fetch.
++      HEAPU32[outLenPtr >>> 2] = 0;
++      HEAPU32[outStatusPtr >>> 2] = 0;
+       emit({
+         type: "fetch-end",
+         id,
+@@ -35,9 +51,10 @@ addToLibrary({
+         kind,
+         status: 0,
+         bytes: 0,
++        error: String(error),
+         ms: performance.now() - startedAt,
+       });
+-      throw error;
++      return 0;
+     }
+   },
+ });
 diff --git i/crates/uv-resolver-wasm/src/main.rs w/crates/uv-resolver-wasm/src/main.rs
 index 7668671..2a88be0 100644
 --- i/crates/uv-resolver-wasm/src/main.rs

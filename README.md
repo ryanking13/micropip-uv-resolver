@@ -64,7 +64,7 @@ The uv wasm is not committed (4.6 MB). Build it with:
 
 It clones uv-emscripten at the pinned commit into `build/uv-emscripten`, applies
 `uv/micropip.patch` (index URL and preferences inputs, selected wheel in the output, a
-host fetch hook), and builds it into `dist/uv/`. A fresh build checks out uv and needs
+host fetch hook that never throws into wasm), and builds it into `dist/uv/`. A fresh build checks out uv and needs
 ~15 GB. To reuse an existing uv-emscripten build:
 
 ```sh
@@ -77,12 +77,14 @@ UV_SRC_FROM=/path/to/uv-emscripten/uv-src EMSDK_DIR=/path/to/uv-emscripten/emsdk
 MICROPIP_DIR=/path/to/micropip ./scripts/build-wheels.sh   # micropip (main) + this package
 ./scripts/build-uv.sh
 PYODIDE_DIR=/path/to/pyodide-0.29.5 node tests/run.mjs
+node tests/fetch-error.mjs                                 # the uv module alone
 ```
 
 `tests/scenarios.py` resolves the same requirements with uv and with micropip's
 resolver and checks the results: packages from PyPI, the lock file first,
 `index_urls=["PYODIDE"]`, a case that needs backtracking, installing and importing what
 uv resolved, installed packages and `reinstall`, and the fallback without the uv module.
+`tests/fetch-error.mjs` checks that the uv module still works after the host fetch throws.
 
 ## Known limitations
 
@@ -94,8 +96,10 @@ uv resolved, installed packages and `reinstall`, and the fallback without the uv
 - **Wheels without PEP 658 metadata** are reported as unavailable by the PoC (range
   requests are compiled in but not used). micropip's side is ready (`FetchResponse.status`,
   `FetchOptions.headers`).
-- **The uv module is unusable after a JS exception** thrown through it; `UvResolver`
-  never raises from its fetch callback to avoid that.
+- **A panic inside uv makes the uv module unusable** (uv is built with
+  `panic = "abort"`): later calls fail with `RuntimeError: unreachable` until the page
+  or process is reloaded. Failed fetches don't cause this: `fetch.js` turns a JS
+  exception into a failed fetch instead of throwing it into wasm.
 - The lock file rule is approximated with preferences (see above), and lock file
   packages are resolved by uv (including their dependencies), where micropip leaves
   those to `pyodide.loadPackage`.
