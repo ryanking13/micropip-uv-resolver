@@ -63,6 +63,11 @@ How it works:
   newest compatible one allowed by the requirements seen so far), and for each wheel's
   metadata, the project pages of its dependencies. With this, resolutions take about as
   long as with micropip's resolver.
+- Project pages and wheel metadata are kept across resolutions (wheel metadata until
+  evicted, pages for 5 minutes), so the next `micropip.install` in a session fetches
+  little or nothing: resolving `fastapi` again takes 0.26 s with no fetches, instead of
+  0.78 s with 22. All `UvResolver`s share one `Cache` by default; pass
+  `UvResolver(..., cache=Cache(...))` for your own, or `cache=None` to disable it.
 - For wheels whose index doesn't serve their metadata separately (PEP 658), e.g. a
   Simple HTML index or a `Source` plugin, `UvResolver` reads `.dist-info/METADATA` from
   the wheel with HTTP range requests (the end of the zip, then the METADATA entry). If
@@ -117,12 +122,12 @@ uv run --python 3.14 --with pytest --with-editable /path/to/micropip pytest test
 `tests/scenarios.py` resolves the same requirements with uv and with micropip's
 resolver, from PyPI only, and checks the results: pure Python packages and pyemscripten
 wheels on PyPI, a case that needs backtracking, packages without a usable wheel
-(including regex, which used to hang), an index without PEP 658 metadata, that the lock
-file isn't used, installing and importing what uv resolved, installed packages and
+(including regex, which used to hang), an index without PEP 658 metadata, the cache
+across resolutions, that the lock file isn't used, installing and importing what uv resolved, installed packages and
 `reinstall`, and the fallback without the uv module.
 `tests/fetch-error.mjs` checks that the uv module still works after the host fetch throws.
-`tests/test_wheel_metadata.py` and `tests/test_lookahead.py` test reading METADATA with
-range requests and the lookahead's guesses, on the host.
+`tests/test_wheel_metadata.py`, `tests/test_lookahead.py` and `tests/test_cache.py` test
+reading METADATA with range requests, the lookahead's guesses and the cache, on the host.
 
 ## Known limitations
 

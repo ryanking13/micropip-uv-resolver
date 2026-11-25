@@ -44,6 +44,7 @@ from micropip.resolver import Resolver
 from micropip.sources import LockFileSource, ordered_sources
 from micropip.wheelinfo import WheelInfo
 
+from ._cache import MISSING, Cache
 from ._lookahead import Lookahead
 from ._wheel_metadata import read_wheel_metadata
 
@@ -52,7 +53,7 @@ from micropip._vendored.packaging.src.packaging.requirements import Requirement
 from micropip._vendored.packaging.src.packaging.utils import canonicalize_name
 from micropip._vendored.packaging.src.packaging.version import Version
 
-__all__ = ["UvResolver", "is_supported", "load_uv"]
+__all__ = ["Cache", "UvResolver", "is_supported", "load_uv"]
 
 PROJECT_PREFIX = "micropip://project"
 
@@ -99,6 +100,23 @@ def _is_url_requirement(requirement: str) -> bool:
     return " @ " in requirement or requirement.endswith(".whl") or ":" in requirement
 
 
+DEFAULT_CACHE = Cache()
+"""The cache UvResolver uses unless it's given one."""
+
+
+def _cache_key(source: Any) -> Any:
+    """
+    A key for ``source`` in the page cache: its type and the source itself if
+    it is hashable (e.g. an IndexSource), or its id. The type matters because a
+    subclass of IndexSource compares equal to an IndexSource with the same URL.
+    """
+    try:
+        hash(source)
+    except TypeError:
+        return id(source)
+    return (type(source), source)
+
+
 def _to_js(obj: Any) -> Any:
     from js import Object
     from pyodide.ffi import to_js
@@ -116,6 +134,10 @@ class UvResolver(Resolver):
         client = micropip.Client(resolver=functools.partial(UvResolver, uv=uv))
 
     Without ``uv`` (or without JSPI), it resolves with micropip's resolver.
+
+    Project pages and wheel metadata are kept across resolutions in ``cache``
+    (a :class:`Cache`, by default one shared by all UvResolvers), so that the
+    next ``micropip.install`` doesn't fetch them again. ``cache=None`` disables it.
     """
 
     def __init__(
@@ -124,9 +146,11 @@ class UvResolver(Resolver):
         request: ResolveRequest | None = None,
         *,
         uv: Any | None = None,
+        cache: Cache | None = DEFAULT_CACHE,
     ) -> None:
         super().__init__(compat_layer, request)
         self.uv = uv
+        self.cache = cache
         # Wheels whose index doesn't serve their metadata (PEP 658): URL -> size
         self._without_metadata: dict[str, int | None] = {}
         # Wheels downloaded to read their metadata, reused when installing
@@ -272,19 +296,17 @@ class UvResolver(Resolver):
         except Exception:
             return _to_js({"status": 404, "body": b""})
 
-    def _serves_metadata(self, file: Any) -> bool:
-        """Whether UvResolver serves the metadata of ``file``, for an index that doesn't (PEP 658)."""
-        if not file.filename.endswith(".whl"):
-            return False
-        self._without_metadata[file.url] = file.size
-        return True
-
     async def _fetch_metadata(self, wheel_url: str) -> bytes:
         """The metadata of the wheel at ``wheel_url``: from the index (PEP 658), or read from the wheel."""
+        if self.cache is not None and (data := self.cache.get_metadata(wheel_url)) is not None:
+            return data
         if wheel_url in self._without_metadata:
-            return await self._wheel_metadata(wheel_url)
-        response = await self.fetch(wheel_url + ".metadata", {})
-        return response.content
+            data = await self._wheel_metadata(wheel_url)
+        else:
+            data = (await self.fetch(wheel_url + ".metadata", {})).content
+        if self.cache is not None:
+            self.cache.put_metadata(wheel_url, data)
+        return data
 
     async def _wheel_metadata(self, url: str) -> bytes:
         """The METADATA of the wheel at ``url``, read with range requests when possible."""
@@ -306,7 +328,22 @@ class UvResolver(Resolver):
         The project as PEP 691 JSON, for uv: the files of the first source group
         (in micropip's order) that has the project. The lock file is skipped.
         """
-        for group in self._index_groups():
+        groups = self._index_groups()
+        key = (tuple(tuple(_cache_key(s) for s in group) for group in groups), name)
+        cached = self.cache.get_page(key) if self.cache is not None else MISSING
+        if cached is MISSING:
+            cached = await self._load_project_page(name, groups)
+            if self.cache is not None:
+                self.cache.put_page(key, cached)
+        page, without_metadata = cached
+        self._without_metadata.update(without_metadata)
+        return page
+
+    async def _load_project_page(
+        self, name: str, groups: list
+    ) -> tuple[dict | None, dict[str, int | None]]:
+        """The project page, and the wheels on it without metadata (URL -> size)."""
+        for group in groups:
             for source in group:
                 page = await source.get_project(name, self.fetch)
                 if page is not None:
@@ -315,25 +352,32 @@ class UvResolver(Resolver):
                 continue
             break
         else:
-            return None
+            return None, {}
 
-        files = [
-            {
-                "filename": f.filename,
-                "url": f.url,
-                "hashes": f.hashes,
+        files = []
+        without_metadata: dict[str, int | None] = {}
+        for f in page.files:
+            core_metadata = f.core_metadata
+            if not core_metadata and f.filename.endswith(".whl"):
                 # uv only uses wheels with metadata. For wheels whose index
                 # doesn't serve it, UvResolver reads it from the wheel.
-                "core-metadata": f.core_metadata or self._serves_metadata(f),
-                "yanked": f.yanked,
-                "requires-python": f.requires_python,
-                "size": f.size,
-            }
-            for f in page.files
-        ]
-        return {
+                core_metadata = True
+                without_metadata[f.url] = f.size
+            files.append(
+                {
+                    "filename": f.filename,
+                    "url": f.url,
+                    "hashes": f.hashes,
+                    "core-metadata": core_metadata or False,
+                    "yanked": f.yanked,
+                    "requires-python": f.requires_python,
+                    "size": f.size,
+                }
+            )
+        page_json = {
             "meta": {"api-version": "1.1"},
             "name": name,
             "versions": list(page.versions),
             "files": files,
         }
+        return page_json, without_metadata
