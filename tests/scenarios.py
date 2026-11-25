@@ -5,10 +5,12 @@
 # UvResolver only uses package indexes (not the lock file), so the comparisons
 # resolve from PyPI only (index_urls=["PYPI"]) with both resolvers.
 import asyncio
+import dataclasses
 import functools
 import time
 
 import micropip
+from micropip.sources import IndexSource
 from micropip_uv_resolver import UvResolver, is_supported, load_uv
 
 uv_module = await load_uv(UV_MODULE)  # noqa: F821
@@ -77,7 +79,47 @@ for name in ["markupsafe", "regex"]:
     else:
         raise AssertionError("expected 'no usable wheels'")
 
-# 5. The lock file is not used: the default index URLs resolve from PyPI only,
+
+# 5. An index without PEP 658 metadata: UvResolver reads METADATA from the
+#    wheels with range requests, and installs them as usual.
+class NoMetadataSource(IndexSource):
+    """PyPI, without the metadata of the files."""
+
+    async def get_project(self, name, fetch):
+        page = await super().get_project(name, fetch)
+        if page is not None:
+            page.files = [dataclasses.replace(f, core_metadata=None) for f in page.files]
+        return page
+
+
+class RecordingLayer(type(micropip.default_client.compat_layer)):
+    def __init__(self):
+        super().__init__()
+        self.requests = []
+
+    async def fetch(self, url, options):
+        response = await super().fetch(url, options)
+        self.requests.append((url, options.headers.get("Range"), response.status))
+        return response
+
+
+print("\n=== index without PEP 658 metadata: ['requests']")
+layer = RecordingLayer()
+client = micropip.Client(layer, resolver=functools.partial(UvResolver, uv=uv_module))
+no_metadata = [NoMetadataSource("PYPI")]
+resolution = await client.resolve(["requests"], index_urls=no_metadata)
+uv_pypi = await UvClient().resolve(["requests"], **PYPI)
+assert summary(resolution) == summary(uv_pypi), (summary(resolution), summary(uv_pypi))
+assert not any(url.endswith(".metadata") for url, _, _ in layer.requests)
+ranged = [(url, status) for url, range_, status in layer.requests if range_]
+assert ranged and all(status == 206 for _, status in ranged), layer.requests
+downloaded = sum(len(w.data) for w in resolution.wheels if w.downloaded)
+print(
+    f"  {len(ranged)} range requests, {len(resolution.wheels)} wheels, none downloaded: {downloaded == 0}"
+)
+assert downloaded == 0
+
+# 6. The lock file is not used: the default index URLs resolve from PyPI only,
 #    and index URLs without a package index fall back to micropip's resolver.
 print("\n=== the lock file is not used")
 resolution = await UvClient().resolve(["httpx"])
@@ -87,7 +129,7 @@ resolution = await UvClient().resolve(["numpy"], index_urls=["PYODIDE"])
 assert [p.name for p in resolution.lockfile_packages] == ["numpy"]
 print("  index_urls=['PYODIDE'] -> micropip's resolver:", ", ".join(summary(resolution)))
 
-# 6. Install what uv resolved, and use it
+# 7. Install what uv resolved, and use it
 print("\n=== install with UvResolver")
 client = UvClient()
 resolution = await client.resolve(["requests"], **PYPI)
@@ -99,7 +141,7 @@ import requests  # noqa: E402
 
 print("  imported requests", requests.__version__)
 
-# 7. Installed packages (ResolveRequest.installed)
+# 8. Installed packages (ResolveRequest.installed)
 print("\n=== installed packages")
 resolution = await client.resolve(["requests"], **PYPI)
 assert summary(resolution) == [], summary(resolution)
@@ -115,7 +157,7 @@ resolution = await client.resolve(["urllib3<2"], reinstall=True, **PYPI)
 assert [w.version.major for w in resolution.wheels if w.name == "urllib3"] == [1]
 print("  urllib3<2, reinstall=True ->", summary(resolution))
 
-# 8. Fallback to micropip's resolver when the uv module isn't available
+# 9. Fallback to micropip's resolver when the uv module isn't available
 print("\n=== fallback")
 assert not is_supported(None)
 resolution = await micropip.Client(resolver=UvResolver).resolve(["httpx"], **PYPI)

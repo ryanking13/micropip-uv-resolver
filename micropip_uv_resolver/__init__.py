@@ -44,6 +44,8 @@ from micropip.resolver import Resolver
 from micropip.sources import LockFileSource, ordered_sources
 from micropip.wheelinfo import WheelInfo
 
+from ._wheel_metadata import read_wheel_metadata
+
 # micropip vendors packaging; use the same copy so that types (Version) match
 from micropip._vendored.packaging.src.packaging.requirements import Requirement
 from micropip._vendored.packaging.src.packaging.utils import canonicalize_name
@@ -119,6 +121,10 @@ class UvResolver(Resolver):
     ) -> None:
         super().__init__(compat_layer, request)
         self.uv = uv
+        # Wheels whose index doesn't serve their metadata (PEP 658): URL -> size
+        self._without_metadata: dict[str, int | None] = {}
+        # Wheels downloaded to read their metadata, reused when installing
+        self._downloaded: dict[str, bytes] = {}
 
     async def resolve(self) -> Resolution:
         requirements = self.request.requirements
@@ -182,16 +188,17 @@ class UvResolver(Resolver):
                 )
 
             included.add(canonicalize_name(name))
-            wheels.append(
-                WheelInfo.from_package_index(
-                    name=name,
-                    filename=pkg["filename"],
-                    url=pkg["url"],
-                    version=Version(version),
-                    sha256=pkg.get("sha256"),
-                    size=None,
-                )
+            wheel = WheelInfo.from_package_index(
+                name=name,
+                filename=pkg["filename"],
+                url=pkg["url"],
+                version=Version(version),
+                sha256=pkg.get("sha256"),
+                size=None,
             )
+            if (data := self._downloaded.get(wheel.url)) is not None:
+                wheel.set_data(data)
+            wheels.append(wheel)
 
         return Resolution(
             wheels=wheels,
@@ -240,10 +247,28 @@ class UvResolver(Resolver):
                     return _to_js({"status": 404, "body": b""})
                 return _to_js({"status": 200, "body": json.dumps(page).encode()})
 
+            wheel_url = url.removesuffix(".metadata")
+            if wheel_url in self._without_metadata:
+                return _to_js({"status": 200, "body": await self._wheel_metadata(wheel_url)})
+
             response = await self.fetch(url, {"accept": accept})
             return _to_js({"status": response.status, "body": response.content})
         except Exception:
             return _to_js({"status": 404, "body": b""})
+
+    def _serves_metadata(self, file: Any) -> bool:
+        """Whether UvResolver serves the metadata of ``file``, for an index that doesn't (PEP 658)."""
+        if not file.filename.endswith(".whl"):
+            return False
+        self._without_metadata[file.url] = file.size
+        return True
+
+    async def _wheel_metadata(self, url: str) -> bytes:
+        """The METADATA of the wheel at ``url``, read with range requests when possible."""
+        result = await read_wheel_metadata(self.fetch, url, self._without_metadata[url])
+        if result.wheel is not None:
+            self._downloaded[url] = result.wheel
+        return result.metadata
 
     def _index_groups(self) -> list:
         """The source groups of the request, in micropip's order, without the lock file."""
@@ -274,7 +299,9 @@ class UvResolver(Resolver):
                 "filename": f.filename,
                 "url": f.url,
                 "hashes": f.hashes,
-                "core-metadata": f.core_metadata or False,
+                # uv only uses wheels with metadata. For wheels whose index
+                # doesn't serve it, UvResolver reads it from the wheel.
+                "core-metadata": f.core_metadata or self._serves_metadata(f),
                 "yanked": f.yanked,
                 "requires-python": f.requires_python,
                 "size": f.size,

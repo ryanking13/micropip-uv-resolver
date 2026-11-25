@@ -56,6 +56,11 @@ How it works:
   (PEP 658 metadata) go through micropip's compatibility layer, so custom layers and
   `credentials` apply.
 - uv only considers wheels (no sdists), since nothing can be built here.
+- For wheels whose index doesn't serve their metadata separately (PEP 658), e.g. a
+  Simple HTML index or a `Source` plugin, `UvResolver` reads `.dist-info/METADATA` from
+  the wheel with HTTP range requests (the end of the zip, then the METADATA entry). If
+  the wheel's size isn't known or the server doesn't answer range requests, it downloads
+  the whole wheel and reuses it when installing.
 - Installed packages (`ResolveRequest.installed`) are preferences too; packages that are
   already installed at the resolved version are skipped, and a different version raises
   "already installed" unless `reinstall=True`, like micropip.
@@ -99,23 +104,23 @@ MICROPIP_DIR=/path/to/micropip ./scripts/build-wheels.sh   # micropip (main) + t
 ./scripts/get-pyodide.sh                                   # Pyodide 314 (npm package) into build/pyodide
 node tests/run.mjs                                         # or PYODIDE_DIR=/path/to/pyodide
 node tests/fetch-error.mjs                                 # the uv module alone
+uv run --python 3.14 --with pytest --with-editable /path/to/micropip pytest tests   # host tests
 ```
 
 `tests/scenarios.py` resolves the same requirements with uv and with micropip's
 resolver, from PyPI only, and checks the results: pure Python packages and pyemscripten
-wheels on PyPI, a case that needs backtracking, packages without a usable wheel (including regex, which used to hang), that
-the lock file isn't used, installing and importing what uv resolved, installed packages
-and `reinstall`, and the fallback without the uv module.
+wheels on PyPI, a case that needs backtracking, packages without a usable wheel
+(including regex, which used to hang), an index without PEP 658 metadata, that the lock
+file isn't used, installing and importing what uv resolved, installed packages and
+`reinstall`, and the fallback without the uv module.
 `tests/fetch-error.mjs` checks that the uv module still works after the host fetch throws.
+`tests/test_wheel_metadata.py` tests reading METADATA with range requests, on the host.
 
 ## Known limitations
 
 - **Slower** than micropip's resolver (2–3x in the scenarios): fetches are sequential
   (prefetching is disabled on Emscripten, and each fetch suspends the wasm stack), and
   each one crosses wasm → JS → Python.
-- **Wheels without PEP 658 metadata** are reported as unavailable by the PoC (range
-  requests are compiled in but not used). micropip's side is ready (`FetchResponse.status`,
-  `FetchOptions.headers`).
 - **A panic inside uv makes the uv module unusable** (uv is built with
   `panic = "abort"`): later calls fail with `RuntimeError: unreachable` until the page
   or process is reloaded. Failed fetches don't cause this: `fetch.js` turns a JS
