@@ -4,6 +4,7 @@
 #
 # UvResolver only uses package indexes (not the lock file), so the comparisons
 # resolve from PyPI only (index_urls=["PYPI"]) with both resolvers.
+import asyncio
 import functools
 import time
 
@@ -63,15 +64,18 @@ uv_starlette = [w.version for w in uv.wheels if w.name == "starlette"]
 assert len(uv_starlette) == 1 and str(uv_starlette[0]).startswith("0.36"), uv_starlette
 assert len([w for w in mp.wheels if w.name == "starlette"]) == 1
 
-# 4. No usable wheel on the index (markupsafe only has native wheels and an sdist)
-print("\n=== no usable wheel: ['markupsafe']")
-try:
-    await UvClient().resolve(["markupsafe"], **PYPI)
-except ValueError as e:
-    assert "no usable wheels" in str(e), str(e)
-    print("  [uv]", str(e).splitlines()[0][:120])
-else:
-    raise AssertionError("expected 'no usable wheels'")
+# 4. No usable wheel on the index (only native wheels and sdists). regex has
+#    hundreds of such versions: uv used to hang on it (a full request channel
+#    in the patched solver), so it runs with a timeout.
+for name in ["markupsafe", "regex"]:
+    print(f"\n=== no usable wheel: [{name!r}]")
+    try:
+        await asyncio.wait_for(UvClient().resolve([name], **PYPI), timeout=60)
+    except ValueError as e:
+        assert "no usable wheels" in str(e), str(e)
+        print("  [uv]", str(e).splitlines()[0][:120])
+    else:
+        raise AssertionError("expected 'no usable wheels'")
 
 # 5. The lock file is not used: the default index URLs resolve from PyPI only,
 #    and index URLs without a package index fall back to micropip's resolver.

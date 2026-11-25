@@ -572,7 +572,7 @@ index fb4a44e..5c92615 100644
 +[target.'cfg(not(target_os = "emscripten"))'.dependencies]
 +tokio = { workspace = true, features = ["process"] }
 diff --git a/crates/uv-resolver/src/resolver/mod.rs b/crates/uv-resolver/src/resolver/mod.rs
-index 8be4a83..087db44 100644
+index 8be4a83..6b601ac 100644
 --- a/crates/uv-resolver/src/resolver/mod.rs
 +++ b/crates/uv-resolver/src/resolver/mod.rs
 @@ -7,7 +7,9 @@ use std::fmt::{Display, Formatter};
@@ -594,7 +594,22 @@ index 8be4a83..087db44 100644
  use tokio::sync::oneshot;
  use tokio_stream::wrappers::ReceiverStream;
  use tracing::{Level, debug, info, instrument, trace, warn};
-@@ -305,32 +308,54 @@ impl<Provider: ResolverProvider, InstalledPackages: InstalledPackagesProvider>
+@@ -298,39 +301,69 @@ impl<Provider: ResolverProvider, InstalledPackages: InstalledPackagesProvider>
+         // A channel to fetch package metadata (e.g., given `flask`, fetch all versions) and version
+         // metadata (e.g., given `flask==1.0.0`, fetch the metadata for that version).
+         // Channel size is set large to accommodate batch prefetching.
++        #[cfg(not(target_os = "emscripten"))]
+         let (request_sink, request_stream) = mpsc::channel(300);
++        // On emscripten the fetcher runs in the solver's task (there is no solver thread), so it
++        // only drains the channel while the solver awaits. Requests are sent with
++        // `blocking_send`, and prefetch requests are never awaited: with a bounded channel, the
++        // solver would park forever on a full channel (e.g. after ~300 versions of a package
++        // without a usable wheel). Make sends never block.
++        #[cfg(target_os = "emscripten")]
++        let (request_sink, request_stream) = mpsc::channel(tokio::sync::Semaphore::MAX_PERMITS);
+         let requests =
+             MetadataRequests::new(state.index.clone(), request_sink, state.recorder.clone());
+ 
          // Run the fetcher.
          let requests_fut = state.clone().fetch(provider.clone(), request_stream).fuse();
  
@@ -663,7 +678,7 @@ index 8be4a83..087db44 100644
          debug!(
              "Solving with installed Python version: {}",
              self.python_requirement.exact()
-@@ -546,7 +571,8 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
+@@ -546,7 +579,8 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                      {
                          Some(ResolverVersion::Unforked(version.clone()))
                      } else {
@@ -673,7 +688,7 @@ index 8be4a83..087db44 100644
                              next_package,
                              next_id,
                              source,
-@@ -557,8 +583,9 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
+@@ -557,8 +591,9 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                              &state.python_requirement,
                              &state.pubgrub,
                              &mut visited,
@@ -685,7 +700,7 @@ index 8be4a83..087db44 100644
  
                          if cache_selected_version
                              && let Some(ResolverVersion::Unforked(version)) = &decision
-@@ -621,7 +648,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
+@@ -621,7 +656,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                          }
                      };
  
@@ -694,7 +709,7 @@ index 8be4a83..087db44 100644
                      if let PackageSource::Registry(index) = source {
                          state.prefetcher.prefetch_batches(
                              next_package,
-@@ -660,15 +687,17 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
+@@ -660,15 +695,17 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                  }
  
                  // Retrieve that package dependencies.
@@ -715,7 +730,7 @@ index 8be4a83..087db44 100644
  
                  match forked_deps {
                      ForkedDependencies::Unavailable(reason) => {
-@@ -1098,7 +1127,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
+@@ -1098,7 +1135,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
      // tracing-durations-export diagrams, but it took ~5% resolver thread runtime for apache-airflow
      // when I last measured.
      #[cfg_attr(feature = "tracing-durations-export", instrument(skip_all, fields(%package)))]
@@ -724,7 +739,7 @@ index 8be4a83..087db44 100644
          &self,
          package: &PubGrubPackage,
          id: Id<PubGrubPackage>,
-@@ -1146,7 +1175,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
+@@ -1146,7 +1183,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                      pubgrub,
                      pins,
                      requests,
@@ -733,7 +748,7 @@ index 8be4a83..087db44 100644
                  PackageSource::Registry(index) => self.choose_version_registry(
                      package,
                      id,
-@@ -1160,14 +1189,14 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
+@@ -1160,14 +1197,14 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                      pins,
                      visited,
                      requests,
@@ -750,7 +765,7 @@ index 8be4a83..087db44 100644
          &self,
          id: Id<PubGrubPackage>,
          name: &PackageName,
-@@ -1186,7 +1215,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
+@@ -1186,7 +1223,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
  
          let dist = Dist::from_url(name.clone(), url.clone())?;
          let registered = requests.metadata(&dist)?;
@@ -759,7 +774,7 @@ index 8be4a83..087db44 100644
  
          // If we failed to fetch the metadata for a URL, we can't proceed.
          let metadata = match &*response {
-@@ -1286,7 +1315,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
+@@ -1286,7 +1323,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
  
      /// Given a candidate registry requirement, choose the next version in range to try, or `None`
      /// if there is no version in this range.
@@ -768,7 +783,7 @@ index 8be4a83..087db44 100644
          &self,
          package: &PubGrubPackage,
          id: Id<PubGrubPackage>,
-@@ -1302,7 +1331,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
+@@ -1302,7 +1339,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
          requests: &'index MetadataRequests,
      ) -> Result<Option<ResolverVersion>, ResolveError> {
          // Wait for the metadata to be available.
@@ -777,7 +792,7 @@ index 8be4a83..087db44 100644
          let index = index.map(IndexMetadata::url);
          visited.insert(name.clone());
  
-@@ -1761,18 +1790,19 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
+@@ -1761,18 +1798,19 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
      }
  
      /// Given a candidate package and version, return its dependencies.
@@ -801,7 +816,7 @@ index 8be4a83..087db44 100644
          if env.marker_environment().is_some() {
              Ok(ForkedDependencies::from_dependencies_platform_specific(
                  dependencies,
-@@ -1789,12 +1819,12 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
+@@ -1789,12 +1827,12 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
  
      /// Given a candidate package and version, return its dependencies.
      #[instrument(skip_all, fields(%package, %version))]
@@ -816,7 +831,7 @@ index 8be4a83..087db44 100644
          env: &ResolverEnvironment,
          python_requirement: &PythonRequirement,
          pubgrub: &State<UvDependencyProvider>,
-@@ -1840,9 +1870,9 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
+@@ -1840,9 +1878,9 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                  }
  
                  // Wait for the metadata to be available.

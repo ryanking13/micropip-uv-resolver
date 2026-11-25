@@ -103,7 +103,7 @@ node tests/fetch-error.mjs                                 # the uv module alone
 
 `tests/scenarios.py` resolves the same requirements with uv and with micropip's
 resolver, from PyPI only, and checks the results: pure Python packages and pyemscripten
-wheels on PyPI, a case that needs backtracking, a package without a usable wheel, that
+wheels on PyPI, a case that needs backtracking, packages without a usable wheel (including regex, which used to hang), that
 the lock file isn't used, installing and importing what uv resolved, installed packages
 and `reinstall`, and the fallback without the uv module.
 `tests/fetch-error.mjs` checks that the uv module still works after the host fetch throws.
@@ -122,10 +122,6 @@ and `reinstall`, and the fallback without the uv module.
   exception into a failed fetch instead of throwing it into wasm.
 - **No lock file**: packages that only Pyodide's lock file provides (e.g. `numpy`,
   `markupsafe`, so also `flask`) can't be resolved with `UvResolver` from PyPI.
-- **uv hangs on some packages without a usable wheel**: resolving `regex` from PyPI
-  (376 versions, none with a usable wheel) never finishes, while smaller version ranges
-  and other packages (`markupsafe`, `numpy`) fail with "no usable wheels" as expected.
-  Not investigated yet.
 - Uses micropip's vendored `packaging` (`micropip._vendored...`) so that `Version` types
   match micropip's.
 
