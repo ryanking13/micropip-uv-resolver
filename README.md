@@ -56,6 +56,13 @@ How it works:
   (PEP 658 metadata) go through micropip's compatibility layer, so custom layers and
   `credentials` apply.
 - uv only considers wheels (no sdists), since nothing can be built here.
+- uv asks for project pages and metadata one at a time (prefetching is disabled in the
+  patched solver), and almost all of the time is spent waiting for them. While it waits,
+  `UvResolver` fetches what uv will likely ask for next, concurrently: for each project
+  page, the metadata of the wheel uv will most likely pick (the installed version, or the
+  newest compatible one allowed by the requirements seen so far), and for each wheel's
+  metadata, the project pages of its dependencies. With this, resolutions take about as
+  long as with micropip's resolver.
 - For wheels whose index doesn't serve their metadata separately (PEP 658), e.g. a
   Simple HTML index or a `Source` plugin, `UvResolver` reads `.dist-info/METADATA` from
   the wheel with HTTP range requests (the end of the zip, then the METADATA entry). If
@@ -114,13 +121,11 @@ wheels on PyPI, a case that needs backtracking, packages without a usable wheel
 file isn't used, installing and importing what uv resolved, installed packages and
 `reinstall`, and the fallback without the uv module.
 `tests/fetch-error.mjs` checks that the uv module still works after the host fetch throws.
-`tests/test_wheel_metadata.py` tests reading METADATA with range requests, on the host.
+`tests/test_wheel_metadata.py` and `tests/test_lookahead.py` test reading METADATA with
+range requests and the lookahead's guesses, on the host.
 
 ## Known limitations
 
-- **Slower** than micropip's resolver (2–3x in the scenarios): fetches are sequential
-  (prefetching is disabled on Emscripten, and each fetch suspends the wasm stack), and
-  each one crosses wasm → JS → Python.
 - **A panic inside uv makes the uv module unusable** (uv is built with
   `panic = "abort"`): later calls fail with `RuntimeError: unreachable` until the page
   or process is reloaded. Failed fetches don't cause this: `fetch.js` turns a JS

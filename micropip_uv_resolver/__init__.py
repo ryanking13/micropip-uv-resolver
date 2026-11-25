@@ -44,6 +44,7 @@ from micropip.resolver import Resolver
 from micropip.sources import LockFileSource, ordered_sources
 from micropip.wheelinfo import WheelInfo
 
+from ._lookahead import Lookahead
 from ._wheel_metadata import read_wheel_metadata
 
 # micropip vendors packaging; use the same copy so that types (Version) match
@@ -64,7 +65,8 @@ def is_supported(uv: Any | None) -> bool:
 async def load_uv(url: str) -> Any:
     """
     Load the uv module (``uv-resolver.mjs``) from ``url`` and return it, to pass
-    to :class:`UvResolver` as ``uv``.
+    to :class:`UvResolver` as ``uv``. The wasm module is downloaded and
+    instantiated here, so that the first resolution doesn't wait for it.
 
     In Node.js, ``url`` can be a file path.
     """
@@ -72,7 +74,11 @@ async def load_uv(url: str) -> Any:
 
     # A dynamic import() through a JS function, since Python can't call import()
     importer = Function("url", "return import(url)")
-    return await importer(url)
+    uv = await importer(url)
+    if uv.isSupported():
+        # Compile and instantiate the wasm now, not in the first resolution
+        await uv.init()
+    return uv
 
 
 def _abi_version() -> str:
@@ -138,6 +144,15 @@ class UvResolver(Resolver):
         from js import globalThis
         from pyodide.ffi import create_proxy
 
+        installed = {} if self.request.reinstall else self._installed()
+        self._lookahead = Lookahead(
+            self._project_page,
+            self._fetch_metadata,
+            installed,
+            ".".join(map(str, sys.version_info[:3])),
+        )
+        self._lookahead.start(list(requirements))
+
         handler = create_proxy(self._uv_fetch)
         # setattr: `globalThis.__uvFetch` would be name-mangled inside the class
         setattr(globalThis, "__uvFetch", handler)
@@ -156,6 +171,7 @@ class UvResolver(Resolver):
         finally:
             delattr(globalThis, "__uvFetch")
             handler.destroy()
+            self._lookahead.cancel()
 
         result = output.to_py()
         if not result["ok"]:
@@ -242,14 +258,14 @@ class UvResolver(Resolver):
         try:
             if url.startswith(PROJECT_PREFIX + "/"):
                 name = url[len(PROJECT_PREFIX) + 1 :].strip("/")
-                page = await self._project_page(name)
+                page = await self._lookahead.page(name)
                 if page is None:
                     return _to_js({"status": 404, "body": b""})
                 return _to_js({"status": 200, "body": json.dumps(page).encode()})
 
-            wheel_url = url.removesuffix(".metadata")
-            if wheel_url in self._without_metadata:
-                return _to_js({"status": 200, "body": await self._wheel_metadata(wheel_url)})
+            if url.endswith(".metadata"):
+                metadata = await self._lookahead.metadata(url.removesuffix(".metadata"))
+                return _to_js({"status": 200, "body": metadata})
 
             response = await self.fetch(url, {"accept": accept})
             return _to_js({"status": response.status, "body": response.content})
@@ -262,6 +278,13 @@ class UvResolver(Resolver):
             return False
         self._without_metadata[file.url] = file.size
         return True
+
+    async def _fetch_metadata(self, wheel_url: str) -> bytes:
+        """The metadata of the wheel at ``wheel_url``: from the index (PEP 658), or read from the wheel."""
+        if wheel_url in self._without_metadata:
+            return await self._wheel_metadata(wheel_url)
+        response = await self.fetch(wheel_url + ".metadata", {})
+        return response.content
 
     async def _wheel_metadata(self, url: str) -> bytes:
         """The METADATA of the wheel at ``url``, read with range requests when possible."""

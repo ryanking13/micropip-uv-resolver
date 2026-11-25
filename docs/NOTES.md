@@ -49,7 +49,7 @@ Both resolvers use `index_urls=["PYPI"]`:
 
    Both fixed in micropip#326 (a conflict now keeps the first selection with a warning).
 3. ~~Installed packages~~ Done: `ResolveRequest.installed` (micropip#328). They are passed to uv as preferences; a resolved version that differs from the installed one raises "already installed" unless `reinstall=True`, like micropip.
-4. **Performance**: uv is 2–3x slower here. Fetches are sequential (prefetching is disabled on emscripten in the patch, and each fetch suspends the wasm stack), and each one crosses wasm → JS → Python.
+4. ~~**Performance**: uv was 2–3x slower.~~ Measured: over 95% of a resolution was waiting for fetches, which uv makes one at a time (prefetching is disabled on emscripten in the patch); uv's own work and the wasm → JS → Python crossings were ~0.04 s. `UvResolver` now looks ahead (`_lookahead.py`): while uv waits, it fetches the metadata of the wheel uv will likely pick from each page, and the pages of that wheel's dependencies, concurrently. requests + httpx went from 1.7 s to ~0.5 s; uv and micropip's resolver now take about the same time (0.5–1 s for the scenarios; whichever runs first pays for a cold network). `load_uv()` also instantiates the wasm up front. Parsing pages and serializing them for uv is small (~0.05 s even with pydantic-core's 15,000 files).
 
 ### For the PoC
 5. ~~**The module is unusable after a JS exception.**~~ Fixed in `fetch.js`. A JS exception thrown into wasm unwound the Rust frames without running destructors (`panic = "abort"`, so there are no landing pads). futures' `block_on` stayed marked as entered, the next call panicked with "cannot execute `LocalPool` executor from within another executor", the module aborted, and every later call failed with `RuntimeError: unreachable`. `fetch.js` now returns a null body (a failed fetch) instead of throwing; `tests/fetch-error.mjs` covers it. A panic inside uv still aborts the module; building with `panic = "unwind"` and `catch_unwind` in `uv_resolve`, or re-creating the module, would handle that.
@@ -89,7 +89,7 @@ Both resolvers use `index_urls=["PYPI"]`:
 ### 6. uv: running the solver without a thread (hardest; needs design discussion)
 - The patch makes `solve`, `choose_version*`, `get_dependencies*` `async` **on all targets**, replaces `wait_blocking()` with an async `wait()`, runs the solver in-task on emscripten (no thread), and disables prefetching there. On native it keeps the thread and wraps `solve` in `block_on`.
 - Touches uv's hot path; maintainers would need to accept async in the solver (or a cfg'd variant, which duplicates code). Best started as an issue describing the use case (micropip/Pyodide), with numbers showing no native regression.
-- Disabling prefetching is a big part of the slowness in finding 4; a single-threaded prefetch (spawn_local) would be a follow-up.
+- Disabling prefetching made uv slow (finding 4); `UvResolver` makes up for it on the micropip side. A single-threaded prefetch (spawn_local) in uv would be the upstream way.
 - Running the fetcher in the solver's task also means the solver must never block on the request channel: the patch makes the channel's capacity unbounded on emscripten (finding 8). An async solver upstream would rather `send().await`.
 
 ### Suggested order
